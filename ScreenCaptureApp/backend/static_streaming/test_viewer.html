@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple WebRTC Test</title>
+    <style>
+        body { margin: 0; background: #000; }
+        video { width: 100%; height: 100vh; object-fit: contain; }
+        #info { position: fixed; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.7); padding: 10px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline controls></video>
+    <div id="info">Connecting...</div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const info = document.getElementById('info');
+        const whepUrl = `http://${window.location.hostname}:8889/live/stream/whep`;
+        
+        async function start() {
+            info.textContent = 'Creating peer connection...';
+            
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+            });
+            
+            pc.onconnectionstatechange = () => {
+                info.textContent = `Connection: ${pc.connectionState}`;
+                console.log('Connection state:', pc.connectionState);
+            };
+            
+            pc.ontrack = (event) => {
+                console.log('Track received:', event.track.kind);
+                info.textContent = `Track received: ${event.track.kind}`;
+                
+                if (event.streams && event.streams[0]) {
+                    video.srcObject = event.streams[0];
+                    video.muted = true; // 자동재생을 위해 muted 필수
+                    info.textContent = `Playing ${event.track.kind}...`;
+                    
+                    video.play().then(() => {
+                        info.textContent = 'Playing! (Click to unmute)';
+                        console.log('Video playing');
+                    }).catch(err => {
+                        info.textContent = `Play error: ${err.message}. Click to play.`;
+                        console.error('Play error:', err);
+                        // 클릭 이벤트로 재시도
+                        document.body.onclick = () => {
+                            video.play().then(() => {
+                                info.textContent = 'Playing!';
+                            });
+                        };
+                    });
+                }
+            };
+            
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+            
+            try {
+                info.textContent = 'Creating offer...';
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                info.textContent = 'Sending offer to server...';
+                const response = await fetch(whepUrl, {
+                    method: 'POST',
+                    body: offer.sdp,
+                    headers: { 'Content-Type': 'application/sdp' }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+                
+                info.textContent = 'Receiving answer...';
+                const answer = await response.text();
+                await pc.setRemoteDescription({
+                    type: 'answer',
+                    sdp: answer
+                });
+                
+                info.textContent = 'Waiting for connection...';
+                console.log('Remote description set');
+                
+            } catch (e) {
+                info.textContent = `Error: ${e.message}`;
+                console.error('Connection error:', e);
+            }
+        }
+        
+        start();
+    </script>
+</body>
+</html>

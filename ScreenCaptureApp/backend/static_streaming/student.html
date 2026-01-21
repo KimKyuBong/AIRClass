@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AIRClass Student</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root { --primary-color: #3ea6ff; --bg-color: #0f0f0f; --text-color: #fff; }
+        body { font-family: -apple-system, sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; touch-action: none; }
+        
+        header { padding: 10px 15px; background-color: #1f1f1f; display: flex; justify-content: space-between; align-items: center; z-index: 10; height: 50px; }
+        .brand { font-weight: 800; font-size: 1.2rem; display: flex; gap: 8px; align-items: center; }
+        .brand i { color: var(--primary-color); }
+        .live-badge { background: #c00; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; animation: pulse 2s infinite; }
+        @keyframes pulse { 0% {opacity: 1;} 50% {opacity: 0.7;} 100% {opacity: 1;} }
+
+        /* Video Area */
+        .video-container { flex: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+
+        /* Question Bar (Bottom) */
+        .question-bar { padding: 10px; background: #1f1f1f; display: flex; gap: 10px; align-items: center; }
+        .question-input-wrapper { flex: 1; position: relative; display: flex; align-items: center; background: #333; border-radius: 20px; padding: 5px 15px; }
+        .question-input { flex: 1; background: transparent; border: none; color: white; padding: 5px; outline: none; }
+        
+        .action-btn { background: none; border: none; color: #aaa; cursor: pointer; padding: 5px; font-size: 1.2rem; transition: color 0.2s; }
+        .action-btn:hover { color: var(--primary-color); }
+        .send-btn { background: var(--primary-color); border: none; color: white; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; margin-left: 5px; }
+
+        /* Preview Area (Image attached) */
+        .preview-area {
+            position: absolute; bottom: 70px; left: 10px; right: 10px;
+            background: rgba(30,30,30,0.9); border-radius: 8px; padding: 10px;
+            display: none; align-items: center; gap: 10px; border: 1px solid #444;
+        }
+        .preview-img { height: 60px; border-radius: 4px; }
+        .preview-close { margin-left: auto; color: #fff; cursor: pointer; padding: 5px; }
+
+        /* Quiz Overlay */
+        .quiz-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9); padding: 20px; border-radius: 10px; width: 80%; max-width: 400px;
+            text-align: center; border: 2px solid var(--primary-color); display: none; z-index: 100;
+        }
+        .quiz-title { font-size: 1.5rem; margin-bottom: 20px; color: var(--primary-color); }
+        .quiz-option { padding: 15px; background: #333; border: 1px solid #555; border-radius: 8px; margin-bottom: 10px; cursor: pointer; }
+        
+        /* Drawing Modal */
+        .draw-modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #fff; z-index: 200; display: none; flex-direction: column;
+        }
+        .draw-header {
+            padding: 10px; background: #f0f0f0; display: flex; justify-content: space-between; align-items: center; color: #000;
+        }
+        .draw-tools { display: flex; gap: 15px; }
+        .tool-btn { font-size: 1.2rem; cursor: pointer; border: none; background: none; padding: 5px; }
+        .tool-btn.active { color: var(--primary-color); }
+        
+        #drawing-canvas { flex: 1; touch-action: none; cursor: crosshair; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="brand"><i class="fas fa-user-graduate"></i> AIRClass Student</div>
+        <div class="live-badge">LIVE</div>
+    </header>
+
+    <div class="video-container">
+        <video id="video" autoplay playsinline muted></video>
+        
+        <!-- Quiz Overlay -->
+        <div id="quiz-overlay" class="quiz-overlay">
+            <div class="quiz-title" id="quiz-question">Quiz Time!</div>
+            <div id="quiz-options-container"></div>
+        </div>
+    </div>
+
+    <!-- Image Preview -->
+    <div id="preview-area" class="preview-area">
+        <img id="preview-img" class="preview-img" src="">
+        <span style="font-size: 0.9rem; color: #ccc;">이미지 첨부됨</span>
+        <div class="preview-close" onclick="clearAttachment()"><i class="fas fa-times"></i></div>
+    </div>
+
+    <!-- Input Bar -->
+    <div class="question-bar">
+        <div class="question-input-wrapper">
+            <button class="action-btn" onclick="openDrawing()" title="그리기"><i class="fas fa-pen"></i></button>
+            <button class="action-btn" onclick="document.getElementById('file-input').click()" title="사진"><i class="fas fa-image"></i></button>
+            <input type="text" id="question-input" class="question-input" placeholder="질문하기...">
+        </div>
+        <button class="send-btn" onclick="sendQuestion()"><i class="fas fa-paper-plane"></i></button>
+        <input type="file" id="file-input" accept="image/*" style="display: none;" onchange="handleFileSelect(this)">
+    </div>
+
+    <!-- Drawing Modal -->
+    <div id="draw-modal" class="draw-modal">
+        <div class="draw-header">
+            <button class="tool-btn" onclick="closeDrawing()">취소</button>
+            <div class="draw-tools">
+                <button class="tool-btn" onclick="clearCanvas()"><i class="fas fa-trash"></i></button>
+                <button class="tool-btn active"><i class="fas fa-pen"></i></button>
+            </div>
+            <button class="tool-btn" style="color: var(--primary-color); font-weight: bold;" onclick="finishDrawing()">첨부</button>
+        </div>
+        <canvas id="drawing-canvas"></canvas>
+    </div>
+
+    <script>
+        // --- WebRTC Logic ---
+        const video = document.getElementById('video');
+        const whepUrl = `http://${window.location.hostname}:8889/live/stream/whep`;
+        let peerConnection = null;
+
+        async function startStream() {
+            if (peerConnection) peerConnection.close();
+            peerConnection = new RTCPeerConnection({ iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] });
+            peerConnection.addTransceiver('video', { direction: 'recvonly' });
+            peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+            peerConnection.ontrack = (event) => { video.srcObject = event.streams[0]; };
+
+            try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                const response = await fetch(whepUrl, { method: 'POST', body: offer.sdp, headers: { 'Content-Type': 'application/sdp' } });
+                if (!response.ok) throw new Error();
+                await peerConnection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+            } catch (e) {}
+        }
+        startStream();
+
+        // --- WebSocket Logic ---
+        const studentId = "std_" + Math.floor(Math.random() * 1000); 
+        const wsUrl = `ws://${window.location.host}/ws/student/${studentId}`;
+        const socket = new WebSocket(wsUrl);
+
+        socket.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === "quiz") showQuiz(msg.data);
+        };
+
+        // --- Question & Attachment Logic ---
+        let currentAttachment = null; // Base64 string
+
+        function handleFileSelect(input) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = (e) => setAttachment(e.target.result);
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        function setAttachment(base64) {
+            currentAttachment = base64;
+            document.getElementById('preview-img').src = base64;
+            document.getElementById('preview-area').style.display = "flex";
+        }
+
+        function clearAttachment() {
+            currentAttachment = null;
+            document.getElementById('file-input').value = "";
+            document.getElementById('preview-area').style.display = "none";
+        }
+
+        function sendQuestion() {
+            const input = document.getElementById('question-input');
+            const text = input.value.trim();
+            
+            if (!text && !currentAttachment) return;
+
+            socket.send(JSON.stringify({
+                type: "send_question",
+                text: text,
+                image: currentAttachment
+            }));
+            
+            input.value = "";
+            clearAttachment();
+            alert("보냈습니다!");
+        }
+
+        // --- Drawing Canvas Logic (Pointer Events for Pressure) ---
+        const modal = document.getElementById('draw-modal');
+        const canvas = document.getElementById('drawing-canvas');
+        const ctx = canvas.getContext('2d');
+        let isDrawing = false;
+
+        function openDrawing() {
+            modal.style.display = "flex";
+            resizeCanvas();
+        }
+
+        function closeDrawing() { modal.style.display = "none"; }
+
+        function resizeCanvas() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height); // White background
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Pointer Events for Pressure Sensitivity
+        canvas.addEventListener('pointerdown', (e) => {
+            isDrawing = true;
+            ctx.beginPath();
+            ctx.moveTo(e.offsetX, e.offsetY);
+            e.preventDefault(); // Prevent scroll
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            if (!isDrawing) return;
+            
+            // Pressure: 0.0 ~ 1.0 (default 0.5 for mouse)
+            const pressure = e.pressure || 0.5;
+            ctx.lineWidth = pressure * 10; // Max width 10px
+            ctx.strokeStyle = "#000";
+            
+            ctx.lineTo(e.offsetX, e.offsetY);
+            ctx.stroke();
+            
+            // Smooth curves could be better with quadraticCurveTo, 
+            // but simple lineTo is fast for prototype
+            ctx.beginPath();
+            ctx.moveTo(e.offsetX, e.offsetY);
+            
+            e.preventDefault();
+        });
+
+        canvas.addEventListener('pointerup', () => { isDrawing = false; });
+        canvas.addEventListener('pointercancel', () => { isDrawing = false; });
+
+        function finishDrawing() {
+            // Convert to JPEG (smaller than PNG)
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+            setAttachment(dataUrl);
+            closeDrawing();
+        }
+
+        // --- Quiz Logic (Same as before) ---
+        function showQuiz(data) {
+            const overlay = document.getElementById('quiz-overlay');
+            const title = document.getElementById('quiz-question');
+            const container = document.getElementById('quiz-options-container');
+            title.textContent = data.question;
+            container.innerHTML = "";
+            data.options.forEach((opt, idx) => {
+                const btn = document.createElement("div");
+                btn.className = "quiz-option";
+                btn.textContent = opt;
+                btn.onclick = () => {
+                    socket.send(JSON.stringify({ type: "submit_quiz", quiz_id: data.id, answer: idx + 1, is_correct: (idx + 1 == data.answer) }));
+                    overlay.style.display = "none";
+                    alert((idx + 1 == data.answer) ? "정답!" : "땡!");
+                };
+                container.appendChild(btn);
+            });
+            overlay.style.display = "block";
+        }
+    </script>
+</body>
+</html>
