@@ -1,24 +1,104 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import Hls from 'hls.js';
   
   let ws = null;
-  let currentImage = null;
+  let videoElement = null;
+  let hls = null;
   let isConnected = false;
+  let isVideoLoaded = false;
   let messages = [];
   let newMessage = '';
   let studentName = '';
   let isJoined = false;
+  let streamToken = '';
 
   onMount(() => {
     studentName = localStorage.getItem('studentName') || '';
   });
 
-  function joinClass() {
+  onDestroy(() => {
+    if (hls) {
+      hls.destroy();
+    }
+    if (ws) {
+      ws.close();
+    }
+  });
+
+  async function joinClass() {
     if (!studentName.trim()) return;
     
     localStorage.setItem('studentName', studentName);
-    connectWebSocket();
-    isJoined = true;
+    
+    // 1. 토큰 발급 받기
+    try {
+      const response = await fetch(`http://${window.location.hostname}:8000/api/token?user_type=student&user_id=${encodeURIComponent(studentName)}`, {
+        method: 'POST'
+      });
+      const data = await response.json();
+      streamToken = data.token;
+      
+      // 2. WebSocket 연결
+      connectWebSocket();
+      
+      // 3. HLS 초기화 (토큰 포함)
+      initializeHLS(data.hls_url);
+      
+      isJoined = true;
+    } catch (error) {
+      alert('토큰 발급 실패: ' + error.message);
+      console.error('Token error:', error);
+    }
+  }
+
+  function initializeHLS(hlsUrl) {
+    if (!videoElement) return;
+
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 90
+      });
+      
+      hls.loadSource(hlsUrl);
+      hls.attachMedia(videoElement);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('HLS manifest loaded');
+        videoElement.play().catch(e => console.log('Autoplay prevented:', e));
+        isVideoLoaded = true;
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('HLS error:', data);
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.log('Network error, trying to recover...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.log('Media error, trying to recover...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.log('Fatal error, destroying HLS...');
+              hls.destroy();
+              setTimeout(initializeHLS, 3000);
+              break;
+          }
+        }
+      });
+    } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS support
+      videoElement.src = hlsUrl;
+      videoElement.addEventListener('loadedmetadata', () => {
+        videoElement.play().catch(e => console.log('Autoplay prevented:', e));
+        isVideoLoaded = true;
+      });
+    }
   }
 
   function connectWebSocket() {
@@ -32,10 +112,12 @@
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       
-      if (data.type === 'screen') {
-        currentImage = data.image;
-      } else if (data.type === 'message') {
-        messages = [...messages, data];
+      if (data.type === 'chat') {
+        // 채팅 메시지 처리
+        messages = [...messages, {
+          sender: data.from,
+          text: data.message
+        }];
       }
     };
 
@@ -48,9 +130,8 @@
   function sendMessage() {
     if (newMessage.trim() && ws) {
       ws.send(JSON.stringify({
-        type: 'message',
-        text: newMessage,
-        sender: studentName
+        type: 'chat',
+        message: newMessage
       }));
       newMessage = '';
     }
@@ -58,8 +139,10 @@
 
   function leaveClass() {
     if (ws) ws.close();
+    if (hls) hls.destroy();
     isJoined = false;
     isConnected = false;
+    isVideoLoaded = false;
   }
 </script>
 
@@ -121,9 +204,16 @@
         <div class="lg:col-span-2">
           <div class="bg-white rounded-lg shadow p-4">
             <h2 class="text-lg font-semibold mb-4 text-gray-800">👨‍🏫 선생님 화면</h2>
-            <div class="bg-gray-100 rounded-lg aspect-video flex items-center justify-center">
-              {#if currentImage}
-                <img src={currentImage} alt="Teacher's screen" class="w-full h-auto rounded-lg" />
+            <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden">
+              {#if isVideoLoaded}
+                <!-- svelte-ignore a11y-media-has-caption -->
+                <video
+                  bind:this={videoElement}
+                  class="w-full h-full object-contain"
+                  autoplay
+                  muted
+                  playsinline
+                ></video>
               {:else}
                 <div class="text-center text-gray-400">
                   <div class="text-4xl mb-2">⏳</div>

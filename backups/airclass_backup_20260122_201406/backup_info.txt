@@ -1,0 +1,16 @@
+AIRClass Backup Information
+============================
+Backup Date: 2026년  1월 22일 목요일 20시 14분 08초 KST
+Backup Name: airclass_backup_20260122_201406
+Hostname: gimgyubongs-MacBook-Pro-2570.local
+System: Darwin
+
+Files Included:
+drwxr-xr-x@ 3 hwansi  staff    96B  1월 22 20:14 backend
+-rw-r--r--@ 1 hwansi  staff     0B  1월 22 20:14 backup_info.txt
+-rw-r--r--@ 1 hwansi  staff     0B  1월 22 20:14 docker_volumes.txt
+-rw-r--r--@ 1 hwansi  staff   709B  1월 22 20:14 docker-compose.simple.yml
+-rw-r--r--@ 1 hwansi  staff   3.5K  1월 22 20:14 docker-compose.yml
+
+To restore this backup:
+  ./scripts/restore-cluster.sh ./backups/airclass_backup_20260122_201406

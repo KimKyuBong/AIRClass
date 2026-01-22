@@ -17,6 +17,7 @@
     "vite": "^7.2.4"
   },
   "dependencies": {
+    "hls.js": "^1.6.15",
     "svelte-spa-router": "^4.0.1"
   }
 }

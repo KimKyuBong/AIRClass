@@ -1,0 +1,140 @@
+# AIRClass Docker Compose - Master-Slave Architecture
+# 사용법:
+#   기본 실행 (Master 1대, Slave 3대): docker-compose up
+#   확장: docker-compose up --scale slave=5
+#   종료: docker-compose down
+
+version: '3.8'
+
+services:
+  # ============================================
+  # Master Node - 요청 라우팅 & 클러스터 관리
+  # ============================================
+  master:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: airclass-master
+    environment:
+      MODE: master
+      NODE_NAME: master
+      NODE_HOST: master
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+    ports:
+      - "8000:8000"  # API 포트
+    networks:
+      - airclass-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=master"
+
+
+  # ============================================
+  # Slave Nodes - 실제 스트리밍 처리
+  # ============================================
+  slave:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      MODE: slave
+      MASTER_URL: http://master:8000
+      NODE_NAME: slave-${HOSTNAME}
+      NODE_HOST: ${HOSTNAME:-slave}
+      NODE_PORT: 8000
+      RTMP_PORT: 1935
+      HLS_PORT: 8888
+      MAX_CONNECTIONS: 150
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+    ports:
+      - "1935"  # RTMP (랜덤 포트)
+      - "8888"  # HLS (랜덤 포트)
+      - "8000"  # API (랜덤 포트)
+    networks:
+      - airclass-network
+    depends_on:
+      master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=slave"
+    deploy:
+      # 리소스 제한 (옵션)
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+
+  # ============================================
+  # Frontend (Optional - 개발용)
+  # ============================================
+  frontend:
+    image: node:18-alpine
+    container_name: airclass-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    networks:
+      - airclass-network
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8000
+    restart: unless-stopped
+    labels:
+      - "airclass.role=frontend"
+
+
+  # ============================================
+  # Monitoring (Optional - Grafana + Prometheus)
+  # ============================================
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: airclass-prometheus
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     - airclass-network
+
+
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: airclass-grafana
+  #   ports:
+  #     - "3000:3000"
+  #   networks:
+  #     - airclass-network
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+
+
+networks:
+  airclass-network:
+    driver: bridge
+
+
+# ============================================
+# 볼륨 (데이터 영속성)
+# ============================================
+volumes:
+  prometheus-data:
+  grafana-data:

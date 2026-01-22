@@ -1,20 +1,106 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import Hls from 'hls.js';
   
   let ws = null;
-  let currentImage = null;
+  let videoElement = null;
+  let hls = null;
   let isConnected = false;
+  let isVideoLoaded = false;
   let students = [];
   let messages = [];
   let newMessage = '';
-  let selectedQuality = 'medium';
+  let hlsUrl = null;
 
-  onMount(() => {
+  onMount(async () => {
     connectWebSocket();
-    return () => {
-      if (ws) ws.close();
-    };
+    await fetchTokenAndInitHLS();
   });
+
+  onDestroy(() => {
+    if (hls) {
+      hls.destroy();
+    }
+    if (ws) {
+      ws.close();
+    }
+  });
+
+  async function fetchTokenAndInitHLS() {
+    try {
+      // Get JWT token from backend
+      const response = await fetch(
+        `http://${window.location.hostname}:8000/api/token?user_type=teacher&user_id=Teacher`,
+        { method: 'POST' }
+      );
+      
+      if (!response.ok) {
+        throw new Error('Failed to get token');
+      }
+      
+      const data = await response.json();
+      hlsUrl = data.hls_url; // URL includes JWT token
+      
+      // Initialize HLS with token-authenticated URL
+      initializeHLS(hlsUrl);
+    } catch (error) {
+      console.error('Error fetching token:', error);
+      // Retry after 3 seconds
+      setTimeout(fetchTokenAndInitHLS, 3000);
+    }
+  }
+
+  function initializeHLS(url) {
+    if (!videoElement) {
+      setTimeout(() => initializeHLS(url), 100);
+      return;
+    }
+
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 90
+      });
+      
+      hls.loadSource(url);
+      hls.attachMedia(videoElement);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('HLS manifest loaded');
+        videoElement.play().catch(e => console.log('Autoplay prevented:', e));
+        isVideoLoaded = true;
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('HLS error:', data);
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.log('Network error, trying to recover...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.log('Media error, trying to recover...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.log('Fatal error, destroying HLS...');
+              hls.destroy();
+              setTimeout(() => fetchTokenAndInitHLS(), 3000);
+              break;
+          }
+        }
+      });
+    } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari native HLS support
+      videoElement.src = url;
+      videoElement.addEventListener('loadedmetadata', () => {
+        videoElement.play().catch(e => console.log('Autoplay prevented:', e));
+        isVideoLoaded = true;
+      });
+    }
+  }
 
   function connectWebSocket() {
     ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/teacher`);
@@ -27,12 +113,18 @@
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       
-      if (data.type === 'screen') {
-        currentImage = data.image;
-      } else if (data.type === 'students') {
-        students = data.students;
-      } else if (data.type === 'message') {
-        messages = [...messages, data];
+      if (data.type === 'student_list') {
+        // 학생 목록 업데이트
+        students = data.students.map(name => ({
+          name: name,
+          joinedAt: new Date().toLocaleTimeString('ko-KR')
+        }));
+      } else if (data.type === 'chat') {
+        // 채팅 메시지 처리
+        messages = [...messages, {
+          sender: data.from,
+          text: data.message
+        }];
       }
     };
 
@@ -45,21 +137,10 @@
   function sendMessage() {
     if (newMessage.trim() && ws) {
       ws.send(JSON.stringify({
-        type: 'message',
-        text: newMessage,
-        sender: 'teacher'
+        type: 'chat',
+        message: newMessage
       }));
       newMessage = '';
-    }
-  }
-
-  function changeQuality(quality) {
-    selectedQuality = quality;
-    if (ws) {
-      ws.send(JSON.stringify({
-        type: 'quality',
-        value: quality
-      }));
     }
   }
 </script>
@@ -76,15 +157,9 @@
         <div class="text-sm text-gray-600">
           학생 {students.length}명 접속 중
         </div>
-        <select 
-          bind:value={selectedQuality}
-          on:change={() => changeQuality(selectedQuality)}
-          class="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-        >
-          <option value="low">낮음 (빠름)</option>
-          <option value="medium">보통</option>
-          <option value="high">높음 (고화질)</option>
-        </select>
+        <div class="text-xs text-gray-500">
+          HLS Stream
+        </div>
       </div>
     </div>
   </header>
@@ -95,13 +170,21 @@
       <div class="lg:col-span-2">
         <div class="bg-white rounded-lg shadow p-4">
           <h2 class="text-lg font-semibold mb-4 text-gray-800">내 화면 미리보기</h2>
-          <div class="bg-gray-100 rounded-lg aspect-video flex items-center justify-center">
-            {#if currentImage}
-              <img src={currentImage} alt="Screen" class="w-full h-auto rounded-lg" />
+          <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden">
+            {#if isVideoLoaded}
+              <!-- svelte-ignore a11y-media-has-caption -->
+              <video
+                bind:this={videoElement}
+                class="w-full h-full object-contain"
+                autoplay
+                muted
+                playsinline
+              ></video>
             {:else}
               <div class="text-center text-gray-400">
                 <div class="text-4xl mb-2">📱</div>
                 <p>Android 앱에서 화면 공유 시작</p>
+                <p class="text-xs mt-2">HLS: {hlsUrl || 'Loading...'}</p>
               </div>
             {/if}
           </div>

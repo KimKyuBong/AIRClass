@@ -219,8 +219,8 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         fabOptions = findViewById(R.id.fabOptions)
 
-        // 기본 IP 설정 (개발용)
-        serverIpInput.setText("10.100.0.102")
+        // 기본 IP 설정 (Android 에뮬레이터용)
+        serverIpInput.setText("10.0.2.2")
         
         updateUI(false)
     }

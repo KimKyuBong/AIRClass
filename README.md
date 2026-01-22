@@ -66,23 +66,35 @@ AIRClass/
 
 ### Android 클라이언트
 - 📱 백그라운드 화면 캡쳐 (MediaProjection API)
-- 🔄 설정 가능한 캡쳐 주기 (최소 100ms)
-- 📤 자동 이미지 압축 및 서버 전송
+- 📡 RTMP 실시간 스트리밍 (RtmpDisplay 라이브러리)
+- 🎥 H.264 하드웨어 인코딩 지원
 - 🔔 Foreground Service 기반 안정적 실행
 
-### 백엔드 서버
-- 🌐 실시간 WebSocket 통신
-- 🎬 히스토리 타임라인 및 재생 기능
-- 🔴 LIVE 모드 자동 업데이트
-- 📊 통계 및 관리 대시보드
-- 🗂️ 이미지 저장 및 관리
+### 백엔드 서버 (MediaMTX + FastAPI)
+- 🎬 **MediaMTX**: RTMP → HLS 자동 변환
+- 🌐 실시간 WebSocket 통신 (채팅 전용)
+- 📊 학생 연결 관리 및 상태 모니터링
+- 💬 양방향 채팅 시스템 (교사 ↔ 학생)
+- 🔄 자동 재연결 및 에러 복구
 
-### 프론트엔드 (Svelte)
-- 👨‍🏫 **Teacher 페이지**: 화면 미리보기, 학생 목록, 실시간 채팅
-- 🎓 **Student 페이지**: 교사 화면 시청, 질문/답변 채팅
-- 📺 **Monitor 페이지**: 전체화면 모니터링 전용 뷰어
-- ⚡ 빠른 반응속도와 모던 UI/UX
+### 프론트엔드 (Svelte + HLS.js)
+- 👨‍🏫 **Teacher 페이지**: HLS 화면 미리보기, 학생 목록, 실시간 채팅
+- 🎓 **Student 페이지**: HLS 스트림 시청, 질문/답변 채팅
+- 📺 **Monitor 페이지**: 전체화면 HLS 모니터링 전용 뷰어
+- 🔧 **Admin 페이지**: 클러스터 모니터링 대시보드 (NEW!)
+- ⚡ 낮은 지연시간 HLS 재생 (Low-Latency HLS)
 - 📱 반응형 디자인 (모바일/태블릿/데스크톱)
+- 🔄 자동 에러 복구 및 재연결
+
+### 🚀 **Production Tools (NEW!)**
+- 📊 **Cluster Monitoring**: 실시간 클러스터 상태 모니터링 스크립트
+- 💾 **Automated Backups**: 설정 자동 백업 및 복구 시스템
+- 📈 **Prometheus Metrics**: `/metrics` 엔드포인트로 성능 모니터링
+- 🎛️ **Admin Dashboard**: 웹 기반 클러스터 관리 UI
+- 🐳 **Docker Cluster**: Master-Slave 아키텍처로 500+ 사용자 지원
+- ⚙️ **Environment Config**: `.env` 기반 통합 설정 관리
+
+**📖 상세 가이드**: [`docs/PRODUCTION_TOOLS.md`](docs/PRODUCTION_TOOLS.md)
 
 ## 빠른 시작
 
@@ -92,8 +104,24 @@ AIRClass/
 - Python 3.8 이상
 - Node.js 16 이상
 - Android Studio (앱 개발용)
+- MediaMTX (자동 실행됨)
 
-### 1. Backend 서버 실행 (터미널 1)
+### 방법 1: 자동 실행 스크립트 (권장)
+
+```bash
+# 모든 서버 한 번에 시작
+./start-dev.sh
+
+# 서버 상태 확인
+./status.sh
+
+# 서버 중지
+./stop-dev.sh
+```
+
+### 방법 2: 수동 실행
+
+#### 1. Backend 서버 실행 (터미널 1)
 
 ```bash
 cd backend
@@ -103,9 +131,10 @@ pip install -r requirements.txt
 python main.py
 ```
 
-서버가 `http://localhost:8000`에서 실행됩니다.
+서버가 `http://localhost:8000`에서 실행됩니다.  
+**MediaMTX도 자동으로 시작됩니다** (RTMP: 1935, HLS: 8888)
 
-### 2. Frontend 실행 (터미널 2)
+#### 2. Frontend 실행 (터미널 2)
 
 ```bash
 cd frontend
@@ -120,42 +149,94 @@ npm run dev
 - 학생용: http://localhost:5173/#/student
 - 모니터: http://localhost:5173/#/monitor
 
-### 3. Android 앱 실행
+#### 3. Android 앱 실행
 
 1. Android Studio로 `android/` 프로젝트 열기
 2. 빌드 및 디바이스/에뮬레이터에 설치
-3. 앱 실행 후 서버 URL 입력: `http://[서버IP]:8000`
-4. 권한 허용 후 화면 캡쳐 시작
+3. 앱 실행 후 화면 공유 시작
+   - 에뮬레이터: `rtmp://10.0.2.2:1935/live/stream` (자동 설정됨)
+   - 실제 디바이스: 서버 IP 입력 필요
+4. 권한 허용 후 RTMP 스트리밍 시작
 
-> 📖 더 자세한 개발 서버 실행 방법은 [DEV_SERVER.md](DEV_SERVER.md)를 참고하세요.
+**스트리밍 플로우:**
+```
+Android App → RTMP (Port 1935) → MediaMTX → HLS (Port 8888) → Web Browser
+```
+
+> 📖 더 자세한 개발 서버 실행 방법은 [DEV_SERVER.md](DEV_SERVER.md)를 참고하세요.  
+> 📖 HLS 마이그레이션 상세 내용은 [docs/HLS_MIGRATION.md](docs/HLS_MIGRATION.md)를 참고하세요.
 
 ## 상세 문서
 
-- [설치 가이드](docs/SETUP_GUIDE.md) - 상세한 설치 및 설정 방법
-- [테스트 가이드](docs/TESTING_GUIDE.md) - 테스트 방법 및 절차
-- [성능 테스트 가이드](docs/PERFORMANCE_TESTING_GUIDE.md) - 성능 측정 및 최적화
-- [WebRTC 가이드](docs/README_WebRTC.md) - WebRTC 통합 방법
-- [향후 계획](docs/NEXT_STEPS.md) - 개발 로드맵
+### 개발 & 사용
+- 🎬 **[HLS 마이그레이션 가이드](docs/HLS_MIGRATION.md)** - WebSocket → HLS 전환 내역 (최신)
+- 📡 [WebSocket 통합 가이드](docs/WEBSOCKET_INTEGRATION.md) - 채팅 시스템 구현
+- 📋 [설치 가이드](docs/SETUP_GUIDE.md) - 상세한 설치 및 설정 방법
+- 🧪 [테스트 가이드](docs/TESTING_GUIDE.md) - 테스트 방법 및 절차
+- ⚡ [성능 테스트 가이드](docs/PERFORMANCE_TESTING_GUIDE.md) - 성능 측정 및 최적화
+- 🎥 [WebRTC 가이드](docs/README_WebRTC.md) - WebRTC 통합 방법 (레거시)
+- 🗺️ [향후 계획](docs/NEXT_STEPS.md) - 개발 로드맵
+
+### 🚀 **Production (NEW!)**
+- 🏭 **[Production Deployment Guide](docs/PRODUCTION_DEPLOYMENT.md)** - 완전한 프로덕션 배포 체크리스트
+- 🔧 **[Production Tools](docs/PRODUCTION_TOOLS.md)** - 모니터링, 백업, 메트릭 도구
+- 📊 [Performance Analysis](docs/PERFORMANCE_ANALYSIS.md) - 50-500명 사용자 확장성 분석
+- 🏗️ [Cluster Architecture](docs/CLUSTER_ARCHITECTURE.md) - Master-Slave 아키텍처 설명
+- 🐳 [Docker Deployment](docs/DOCKER_DEPLOYMENT.md) - Docker 클러스터 배포 가이드
+- 📝 [Implementation Summary](docs/PRODUCTION_IMPLEMENTATION_SUMMARY.md) - 구현 요약
+
+## 빠른 프로덕션 배포 (Quick Production Deploy)
+
+**500명 이상 사용자 지원을 위한 클러스터 배포**:
+
+```bash
+# 1. 환경 설정
+cp .env.example .env
+nano .env  # JWT_SECRET_KEY 등 설정
+
+# 2. 클러스터 시작 (Master + 3 Slaves = 450명)
+docker-compose up -d
+
+# 3. 필요 시 확장 (5 Slaves = 750명)
+docker-compose up -d --scale slave=5
+
+# 4. 클러스터 모니터링
+./scripts/monitor-cluster.sh --watch
+
+# 5. Admin 대시보드 접속
+# http://localhost:5173/admin
+```
+
+**주요 특징**:
+- ⚡ **Auto-scaling**: `--scale slave=N`으로 즉시 확장
+- 🔄 **Load balancing**: 자동 부하 분산
+- 📊 **Monitoring**: 실시간 클러스터 상태 모니터링
+- 💾 **Backups**: 자동 백업 및 복구
+- 📈 **Metrics**: Prometheus 메트릭 (`/metrics`)
+
+**상세 가이드**: [`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md)
 
 ## 기술 스택
 
 ### Android 클라이언트
 - **언어**: Kotlin
 - **주요 라이브러리**: 
-  - MediaProjection API
-  - Retrofit (HTTP 클라이언트)
-  - Coroutines (비동기 처리)
+  - MediaProjection API (화면 캡쳐)
+  - RtmpDisplay (RTMP 스트리밍)
+  - H.264 하드웨어 인코더
 
 ### 백엔드
-- **프레임워크**: FastAPI
-- **통신**: WebSocket, REST API
+- **미디어 서버**: MediaMTX (RTMP → HLS 변환)
+- **애플리케이션 서버**: FastAPI
+- **통신**: WebSocket (채팅), HLS (비디오)
 - **서버**: Uvicorn
 
 ### 프론트엔드
 - **프레임워크**: Svelte 5 + Vite
 - **스타일링**: Tailwind CSS
 - **라우팅**: svelte-spa-router
-- **실시간 통신**: WebSocket API
+- **비디오 플레이어**: HLS.js (Low-Latency HLS)
+- **채팅**: WebSocket API
 - **빌드 도구**: Vite
 
 ## 시스템 요구사항

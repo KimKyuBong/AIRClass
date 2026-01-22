@@ -1,0 +1,60 @@
+# AIRClass Backend with GPU Support (NVIDIA)
+# 다중 화질 제공 및 실시간 트랜스코딩
+
+FROM nvidia/cuda:12.0.0-runtime-ubuntu22.04
+
+# 기본 패키지 설치
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3-pip \
+    wget \
+    curl \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python alias
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
+
+# 작업 디렉토리
+WORKDIR /app
+
+# Python 의존성
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# MediaMTX 다운로드
+ARG TARGETARCH
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64v8" || echo "amd64") && \
+    wget https://github.com/bluenviron/mediamtx/releases/download/v1.9.3/mediamtx_v1.9.3_linux_${ARCH}.tar.gz && \
+    tar -xzf mediamtx_v1.9.3_linux_${ARCH}.tar.gz && \
+    rm mediamtx_v1.9.3_linux_${ARCH}.tar.gz && \
+    chmod +x mediamtx
+
+# 애플리케이션 코드
+COPY main.py .
+COPY mediamtx.yml .
+COPY mediamtx-gpu.yml .
+COPY cluster.py .
+COPY transcoder.py .
+
+# 포트 노출
+EXPOSE 8000 1935 8888
+
+# 환경변수
+ENV MODE=slave \
+    MASTER_URL="" \
+    NODE_NAME=slave \
+    JWT_SECRET_KEY="" \
+    MAX_CONNECTIONS=150 \
+    ENABLE_GPU=true \
+    ENABLE_TRANSCODING=true
+
+# 헬스체크
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 시작 스크립트
+COPY docker-entrypoint-gpu.sh /
+RUN chmod +x /docker-entrypoint-gpu.sh
+
+ENTRYPOINT ["/docker-entrypoint-gpu.sh"]

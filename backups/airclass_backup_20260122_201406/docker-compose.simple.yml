@@ -1,0 +1,26 @@
+# AIRClass Simple Deployment - Standalone Mode
+# 클러스터 없이 단일 서버로 빠르게 테스트
+# 사용법: docker-compose -f docker-compose.simple.yml up
+
+version: '3.8'
+
+services:
+  airclass:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: airclass-standalone
+    environment:
+      MODE: standalone
+      NODE_NAME: standalone
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key}
+    ports:
+      - "8000:8000"  # Backend API
+      - "1935:1935"  # RTMP
+      - "8888:8888"  # HLS
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

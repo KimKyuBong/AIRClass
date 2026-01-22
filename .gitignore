@@ -5,11 +5,13 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv/
 env/
 ENV/
 *.egg-info/
 dist/
 build/
+*.pyc
 
 # Android
 *.apk
@@ -29,12 +31,18 @@ captures/
 .externalNativeBuild
 .cxx
 
-# Backend uploads
+# Backend
 backend/uploads/
-*.jpg
-*.jpeg
-*.png
-*.gif
+backend/stream/
+backend/*.log
+backend/.venv/
+backend/venv/
+*.mp4
+*.mov
+*.avi
+
+# Test videos
+hd_video.mp4
 
 # Frontend (Node.js)
 node_modules/
@@ -55,6 +63,11 @@ Thumbs.db
 # Logs
 *.log
 logs/
+backend.log
+frontend.log
+*.pid
+backend.pid
+frontend.pid
 
 # Environment variables
 .env
