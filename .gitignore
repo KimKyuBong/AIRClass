@@ -54,7 +54,11 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Environment variables
 .env
 .env.local
+
+# Dev server PIDs
+.pids/
