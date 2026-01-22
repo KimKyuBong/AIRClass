@@ -1,25 +1,53 @@
-# AirClass
+# AIRClass
 
-실시간 화면 캡쳐 및 스트리밍 시스템
+**A**ndroid **I**mage **R**eal-time Classroom - 실시간 화면 공유 교육 플랫폼
 
 ## 프로젝트 개요
 
-AirClass는 Android 기기의 화면을 실시간으로 캡쳐하여 웹 브라우저에서 모니터링할 수 있는 통합 솔루션입니다.
+AIRClass는 **교육 환경을 위한 실시간 화면 공유 시스템**입니다. Android 기기의 화면을 무선으로 캡쳐하여 웹 브라우저에서 실시간으로 모니터링할 수 있으며, 교사와 학생 간의 원활한 화면 공유를 지원합니다.
+
+### AIRClass의 의미
+- **Android Image Real-time Classroom**
+- 무선(Air)으로 교실(Class)을 연결하는 스마트 교육 솔루션
+- 케이블 없이 Android 기기 화면을 실시간으로 공유
+
+### 주요 사용 사례
+- 📚 **교육**: 교사의 태블릿 화면을 학생들에게 실시간 공유
+- 💼 **프레젠테이션**: 무선으로 스마트폰 화면 시연
+- 🔍 **모니터링**: 원격지 Android 기기 화면 관찰
+- 🎮 **데모**: 앱 시연 및 사용법 안내
 
 ## 프로젝트 구조
 
 ```
-AirClass/
-└── ScreenCaptureApp/     # 화면 캡쳐 애플리케이션
-    ├── android/          # Android 클라이언트 앱 (Kotlin)
-    ├── backend/          # FastAPI 백엔드 서버
-    └── 문서/
-        ├── README.md                      # 프로젝트 개요
-        ├── SETUP_GUIDE.md                # 설치 가이드
-        ├── TESTING_GUIDE.md              # 테스트 가이드
-        ├── PERFORMANCE_TESTING_GUIDE.md  # 성능 테스트 가이드
-        ├── README_WebRTC.md              # WebRTC 통합 가이드
-        └── NEXT_STEPS.md                 # 향후 개발 계획
+AIRClass/
+├── ScreenCaptureApp/
+│   ├── android/                        # Android 클라이언트 앱
+│   │   ├── app/
+│   │   │   └── src/main/java/com/example/screencapture/
+│   │   │       ├── MainActivity.kt
+│   │   │       └── service/ScreenCaptureService.kt
+│   │   └── build.gradle.kts
+│   │
+│   ├── backend/                        # FastAPI 백엔드 서버
+│   │   ├── main.py                     # 메인 서버
+│   │   ├── streaming_server.py         # 스트리밍 서버
+│   │   ├── webrtc_web_server.py       # WebRTC 서버
+│   │   ├── static_streaming/           # 웹 뷰어 HTML
+│   │   ├── stream/                     # HLS 스트림 세그먼트
+│   │   └── requirements.txt
+│   │
+│   └── 문서/
+│       ├── README.md                   # 상세 프로젝트 설명
+│       ├── SETUP_GUIDE.md             # 설치 가이드
+│       ├── TESTING_GUIDE.md           # 테스트 가이드
+│       ├── PERFORMANCE_TESTING_GUIDE.md
+│       ├── README_WebRTC.md           # WebRTC 통합
+│       └── NEXT_STEPS.md              # 개발 로드맵
+│
+├── README.md                           # 이 파일
+├── LICENSE                             # GPL-3.0 라이선스
+└── .gitignore
 ```
 
 ## 주요 기능
