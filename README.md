@@ -1,15 +1,17 @@
 # AIRClass
 
-**A**ndroid **I**mage **R**eal-time Classroom - 실시간 화면 공유 교육 플랫폼
+**AI Interactive Responsive Class** - 인공지능 기반 양방향 스마트 교실
 
 ## 프로젝트 개요
 
-AIRClass는 **교육 환경을 위한 실시간 화면 공유 시스템**입니다. Android 기기의 화면을 무선으로 캡쳐하여 웹 브라우저에서 실시간으로 모니터링할 수 있으며, 교사와 학생 간의 원활한 화면 공유를 지원합니다.
+AIRClass는 **AI 기반 양방향 교육 환경을 위한 실시간 화면 공유 시스템**입니다. Android 기기의 화면을 무선으로 캡쳐하여 웹 브라우저에서 실시간으로 모니터링할 수 있으며, 교사와 학생 간의 원활한 화면 공유를 지원합니다.
 
 ### AIRClass의 의미
-- **Android Image Real-time Classroom**
-- 무선(Air)으로 교실(Class)을 연결하는 스마트 교육 솔루션
-- 케이블 없이 Android 기기 화면을 실시간으로 공유
+- **AI Interactive Responsive Class**
+- **AI**: 인공지능 기반 스마트 교육
+- **Interactive**: 양방향 실시간 소통
+- **Responsive**: 반응형 다중 디바이스 지원
+- **Class**: 교실 환경 최적화
 
 ### 주요 사용 사례
 - 📚 **교육**: 교사의 태블릿 화면을 학생들에게 실시간 공유
