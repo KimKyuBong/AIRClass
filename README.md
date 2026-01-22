@@ -34,13 +34,20 @@ AIRClass/
 │   ├── main.py                         # 메인 서버
 │   ├── streaming_server.py             # 스트리밍 서버
 │   ├── webrtc_web_server.py           # WebRTC 서버
-│   ├── static_streaming/               # 웹 뷰어 HTML
-│   │   ├── teacher.html               # 교사용 대시보드
-│   │   ├── student.html               # 학생용 뷰어
-│   │   ├── monitor.html               # 모니터링 뷰어
-│   │   └── webrtc_viewer.html         # WebRTC 뷰어
+│   ├── static_streaming/               # 레거시 웹 뷰어 HTML
 │   ├── stream/                         # HLS 스트림 세그먼트
 │   └── requirements.txt
+│
+├── frontend/                           # Svelte 프론트엔드 (신규)
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Teacher.svelte         # 👨‍🏫 교사용 대시보드
+│   │   │   ├── Student.svelte         # 🎓 학생용 뷰어
+│   │   │   └── Monitor.svelte         # 📺 모니터 전용 뷰어
+│   │   ├── components/                # 재사용 컴포넌트
+│   │   └── App.svelte                 # 메인 앱 (라우팅)
+│   ├── package.json
+│   └── vite.config.js
 │
 ├── docs/                               # 문서
 │   ├── README.md                       # 상세 프로젝트 설명
@@ -64,11 +71,18 @@ AIRClass/
 - 🔔 Foreground Service 기반 안정적 실행
 
 ### 백엔드 서버
-- 🌐 실시간 웹 뷰어 (WebSocket)
+- 🌐 실시간 WebSocket 통신
 - 🎬 히스토리 타임라인 및 재생 기능
 - 🔴 LIVE 모드 자동 업데이트
 - 📊 통계 및 관리 대시보드
 - 🗂️ 이미지 저장 및 관리
+
+### 프론트엔드 (Svelte)
+- 👨‍🏫 **Teacher 페이지**: 화면 미리보기, 학생 목록, 실시간 채팅
+- 🎓 **Student 페이지**: 교사 화면 시청, 질문/답변 채팅
+- 📺 **Monitor 페이지**: 전체화면 모니터링 전용 뷰어
+- ⚡ 빠른 반응속도와 모던 UI/UX
+- 📱 반응형 디자인 (모바일/태블릿/데스크톱)
 
 ## 빠른 시작
 
@@ -84,9 +98,20 @@ python main.py
 
 서버가 `http://localhost:8000`에서 실행됩니다.
 
-### 2. 웹 뷰어 접속
+### 2. 프론트엔드 실행 (Svelte)
 
-브라우저에서 `http://localhost:8000/viewer` 접속
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+프론트엔드가 `http://localhost:5173`에서 실행됩니다.
+
+**접속 URL:**
+- 교사용: http://localhost:5173/#/teacher
+- 학생용: http://localhost:5173/#/student
+- 모니터: http://localhost:5173/#/monitor
 
 ### 3. Android 앱 실행
 
@@ -118,8 +143,11 @@ python main.py
 - **서버**: Uvicorn
 
 ### 프론트엔드
-- **기술**: Vanilla JavaScript, HTML5, CSS3
+- **프레임워크**: Svelte 5 + Vite
+- **스타일링**: Tailwind CSS
+- **라우팅**: svelte-spa-router
 - **실시간 통신**: WebSocket API
+- **빌드 도구**: Vite
 
 ## 시스템 요구사항
 
