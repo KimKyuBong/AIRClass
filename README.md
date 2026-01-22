@@ -23,33 +23,36 @@ AIRClass는 **AI 기반 양방향 교육 환경을 위한 실시간 화면 공�
 
 ```
 AIRClass/
-├── ScreenCaptureApp/
-│   ├── android/                        # Android 클라이언트 앱
-│   │   ├── app/
-│   │   │   └── src/main/java/com/example/screencapture/
-│   │   │       ├── MainActivity.kt
-│   │   │       └── service/ScreenCaptureService.kt
-│   │   └── build.gradle.kts
-│   │
-│   ├── backend/                        # FastAPI 백엔드 서버
-│   │   ├── main.py                     # 메인 서버
-│   │   ├── streaming_server.py         # 스트리밍 서버
-│   │   ├── webrtc_web_server.py       # WebRTC 서버
-│   │   ├── static_streaming/           # 웹 뷰어 HTML
-│   │   ├── stream/                     # HLS 스트림 세그먼트
-│   │   └── requirements.txt
-│   │
-│   └── 문서/
-│       ├── README.md                   # 상세 프로젝트 설명
-│       ├── SETUP_GUIDE.md             # 설치 가이드
-│       ├── TESTING_GUIDE.md           # 테스트 가이드
-│       ├── PERFORMANCE_TESTING_GUIDE.md
-│       ├── README_WebRTC.md           # WebRTC 통합
-│       └── NEXT_STEPS.md              # 개발 로드맵
+├── android/                            # Android 클라이언트 앱
+│   ├── app/
+│   │   └── src/main/java/com/example/screencapture/
+│   │       ├── MainActivity.kt
+│   │       └── service/ScreenCaptureService.kt
+│   └── build.gradle.kts
 │
-├── README.md                           # 이 파일
+├── backend/                            # FastAPI 백엔드 서버
+│   ├── main.py                         # 메인 서버
+│   ├── streaming_server.py             # 스트리밍 서버
+│   ├── webrtc_web_server.py           # WebRTC 서버
+│   ├── static_streaming/               # 웹 뷰어 HTML
+│   │   ├── teacher.html               # 교사용 대시보드
+│   │   ├── student.html               # 학생용 뷰어
+│   │   ├── monitor.html               # 모니터링 뷰어
+│   │   └── webrtc_viewer.html         # WebRTC 뷰어
+│   ├── stream/                         # HLS 스트림 세그먼트
+│   └── requirements.txt
+│
+├── docs/                               # 문서
+│   ├── README.md                       # 상세 프로젝트 설명
+│   ├── SETUP_GUIDE.md                 # 설치 가이드
+│   ├── TESTING_GUIDE.md               # 테스트 가이드
+│   ├── PERFORMANCE_TESTING_GUIDE.md   # 성능 테스트 가이드
+│   ├── README_WebRTC.md               # WebRTC 통합 가이드
+│   └── NEXT_STEPS.md                  # 개발 로드맵
+│
+├── README.md                           # 프로젝트 개요 (이 파일)
 ├── LICENSE                             # GPL-3.0 라이선스
-└── .gitignore
+└── .gitignore                          # Git 제외 파일
 ```
 
 ## 주요 기능
@@ -72,7 +75,7 @@ AIRClass/
 ### 1. 백엔드 서버 실행
 
 ```bash
-cd ScreenCaptureApp/backend
+cd backend
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -87,18 +90,18 @@ python main.py
 
 ### 3. Android 앱 실행
 
-1. Android Studio로 `ScreenCaptureApp/android/` 프로젝트 열기
+1. Android Studio로 `android/` 프로젝트 열기
 2. 빌드 및 디바이스/에뮬레이터에 설치
 3. 앱 실행 후 서버 URL 입력: `http://[서버IP]:8000`
 4. 권한 허용 후 화면 캡쳐 시작
 
 ## 상세 문서
 
-- [설치 가이드](ScreenCaptureApp/SETUP_GUIDE.md) - 상세한 설치 및 설정 방법
-- [테스트 가이드](ScreenCaptureApp/TESTING_GUIDE.md) - 테스트 방법 및 절차
-- [성능 테스트 가이드](ScreenCaptureApp/PERFORMANCE_TESTING_GUIDE.md) - 성능 측정 및 최적화
-- [WebRTC 가이드](ScreenCaptureApp/README_WebRTC.md) - WebRTC 통합 방법
-- [향후 계획](ScreenCaptureApp/NEXT_STEPS.md) - 개발 로드맵
+- [설치 가이드](docs/SETUP_GUIDE.md) - 상세한 설치 및 설정 방법
+- [테스트 가이드](docs/TESTING_GUIDE.md) - 테스트 방법 및 절차
+- [성능 테스트 가이드](docs/PERFORMANCE_TESTING_GUIDE.md) - 성능 측정 및 최적화
+- [WebRTC 가이드](docs/README_WebRTC.md) - WebRTC 통합 방법
+- [향후 계획](docs/NEXT_STEPS.md) - 개발 로드맵
 
 ## 기술 스택
 
