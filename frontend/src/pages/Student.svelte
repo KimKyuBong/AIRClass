@@ -14,6 +14,7 @@
   let webrtcUrl = '';
   let latencyMonitorInterval = null;
   let currentLatency = 0;
+  let nodeInfo = null; // 연결된 노드 정보
 
   onMount(async () => {
     console.log('[Student] Component mounted');
@@ -64,8 +65,18 @@
       streamToken = data.token;
       webrtcUrl = data.webrtc_url;
       
+      // 노드 정보 저장
+      nodeInfo = {
+        mode: data.mode || 'unknown',
+        node_name: data.node_name || 'unknown',
+        node_id: data.node_id || 'unknown',
+        host: data.host || window.location.hostname,
+        webrtc_port: data.webrtc_url ? data.webrtc_url.split(':')[2]?.split('/')[0] : 'unknown'
+      };
+      
       console.log('[Student] Token received:', data);
       console.log('[Student] WebRTC URL:', webrtcUrl);
+      console.log('[Student] Connected to node:', nodeInfo);
       
       // 2. Set joined state first to render the video element
       isJoined = true;
@@ -420,6 +431,11 @@
         <div class="flex items-center gap-3">
           <div class="w-3 h-3 rounded-full {isConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
           <h1 class="text-xl font-bold text-gray-800">🎓 {studentName}님의 수업</h1>
+          {#if nodeInfo}
+            <span class="text-xs px-2 py-1 rounded bg-blue-100 text-blue-800 font-mono">
+              {nodeInfo.node_name} ({nodeInfo.mode})
+            </span>
+          {/if}
           {#if currentLatency > 0}
             <span class="text-xs px-2 py-1 rounded {currentLatency < 300 ? 'bg-green-100 text-green-800' : currentLatency < 1000 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}">
               {currentLatency}ms

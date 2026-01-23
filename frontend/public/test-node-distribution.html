@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIRClass 노드 분산 테스트</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-8">
+        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <h1 class="text-3xl font-bold mb-4 text-gray-800">🎯 AIRClass 노드 분산 테스트</h1>
+            <p class="text-gray-600 mb-4">여러 학생이 어떤 노드에 분산되는지 확인하는 테스트 페이지입니다.</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">서버 주소</label>
+                    <input 
+                        type="text" 
+                        id="serverUrl" 
+                        value="http://localhost:8000"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">학생 수</label>
+                    <input 
+                        type="number" 
+                        id="studentCount" 
+                        value="20"
+                        min="1"
+                        max="100"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                </div>
+            </div>
+
+            <button 
+                onclick="testDistribution()"
+                class="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition mb-4"
+            >
+                🚀 분산 테스트 시작
+            </button>
+
+            <button 
+                onclick="getClusterStatus()"
+                class="w-full bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700 transition"
+            >
+                📊 클러스터 상태 확인
+            </button>
+        </div>
+
+        <!-- 클러스터 상태 -->
+        <div id="clusterStatus" class="bg-white rounded-lg shadow-lg p-6 mb-6 hidden">
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">📊 클러스터 상태</h2>
+            <div id="clusterNodes" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- 노드 카드가 여기에 추가됩니다 -->
+            </div>
+        </div>
+
+        <!-- 결과 표시 -->
+        <div id="results" class="bg-white rounded-lg shadow-lg p-6 hidden">
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">📈 테스트 결과</h2>
+            
+            <!-- 통계 요약 -->
+            <div id="stats" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <!-- 통계 카드가 여기에 추가됩니다 -->
+            </div>
+
+            <!-- 노드별 분산 -->
+            <div id="distribution" class="mb-6">
+                <!-- 차트가 여기에 추가됩니다 -->
+            </div>
+
+            <!-- 상세 결과 테이블 -->
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">#</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">학생 ID</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">노드 이름</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">모드</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">호스트</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">WebRTC 포트</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsTable" class="divide-y divide-gray-200">
+                        <!-- 결과 행이 여기에 추가됩니다 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 로그 -->
+        <div class="bg-white rounded-lg shadow-lg p-6 mt-6">
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">📝 로그</h2>
+            <div id="log" class="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm h-64 overflow-y-auto">
+                <div>준비 완료. '분산 테스트 시작' 버튼을 클릭하세요.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const nodeColors = [
+            'bg-blue-500',
+            'bg-green-500',
+            'bg-purple-500',
+            'bg-pink-500',
+            'bg-yellow-500',
+            'bg-red-500',
+            'bg-indigo-500',
+            'bg-teal-500'
+        ];
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function getClusterStatus() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            log('클러스터 상태 조회 중...');
+
+            try {
+                const response = await fetch(`${serverUrl}/cluster/nodes`);
+                const data = await response.json();
+                
+                log(`✅ 클러스터 상태 조회 성공: ${data.nodes.length}개 노드`);
+                
+                // 클러스터 상태 표시
+                const statusDiv = document.getElementById('clusterStatus');
+                const nodesDiv = document.getElementById('clusterNodes');
+                statusDiv.classList.remove('hidden');
+                
+                nodesDiv.innerHTML = data.nodes.map(node => {
+                    const loadPercent = node.load_percentage || 0;
+                    const loadColor = loadPercent < 50 ? 'bg-green-500' : loadPercent < 80 ? 'bg-yellow-500' : 'bg-red-500';
+                    
+                    return `
+                        <div class="border rounded-lg p-4 ${node.is_healthy ? 'border-green-300 bg-green-50' : 'border-red-300 bg-red-50'}">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="font-bold text-gray-800">${node.node_name}</h3>
+                                <span class="text-xs px-2 py-1 rounded ${node.is_healthy ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'}">
+                                    ${node.is_healthy ? '정상' : '비정상'}
+                                </span>
+                            </div>
+                            <div class="text-sm text-gray-600 space-y-1">
+                                <div>모드: <span class="font-mono">${node.mode || 'sub'}</span></div>
+                                <div>연결: <span class="font-mono">${node.current_connections}/${node.max_connections}</span></div>
+                                <div>부하율: <span class="font-mono ${loadColor} text-white px-2 py-0.5 rounded">${loadPercent.toFixed(1)}%</span></div>
+                                <div>호스트: <span class="font-mono text-xs">${node.host}:${node.webrtc_port}</span></div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                log(`❌ 클러스터 상태 조회 실패: ${error.message}`);
+            }
+        }
+
+        async function testDistribution() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const studentCount = parseInt(document.getElementById('studentCount').value);
+
+            log(`🚀 분산 테스트 시작: ${studentCount}명의 학생`);
+            log(`서버 주소: ${serverUrl}`);
+
+            const results = [];
+            const nodeCount = {};
+
+            // 결과 섹션 표시
+            document.getElementById('results').classList.remove('hidden');
+            const tableBody = document.getElementById('resultsTable');
+            tableBody.innerHTML = '';
+
+            for (let i = 1; i <= studentCount; i++) {
+                const studentId = `student${i}`;
+                
+                try {
+                    log(`[${i}/${studentCount}] ${studentId} 토큰 요청 중...`);
+                    
+                    const response = await fetch(`${serverUrl}/api/token?user_type=student&user_id=${studentId}`, {
+                        method: 'POST'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    
+                    const result = {
+                        index: i,
+                        studentId: studentId,
+                        nodeName: data.node_name || 'unknown',
+                        mode: data.mode || 'unknown',
+                        host: data.host || 'unknown',
+                        webrtcPort: data.webrtc_url ? data.webrtc_url.split(':')[2]?.split('/')[0] : 'unknown',
+                        success: true
+                    };
+
+                    results.push(result);
+
+                    // 노드별 카운트
+                    if (!nodeCount[result.nodeName]) {
+                        nodeCount[result.nodeName] = 0;
+                    }
+                    nodeCount[result.nodeName]++;
+
+                    log(`✅ ${studentId} → ${result.nodeName} (${result.mode})`);
+
+                    // 테이블에 행 추가
+                    const row = document.createElement('tr');
+                    row.className = 'hover:bg-gray-50';
+                    row.innerHTML = `
+                        <td class="px-4 py-3 text-gray-600">${i}</td>
+                        <td class="px-4 py-3 font-mono text-sm">${studentId}</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-1 rounded text-xs font-semibold ${getNodeColor(result.nodeName)} text-white">
+                                ${result.nodeName}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 font-mono text-xs">${result.mode}</td>
+                        <td class="px-4 py-3 font-mono text-xs">${result.host}</td>
+                        <td class="px-4 py-3 font-mono text-xs">${result.webrtcPort}</td>
+                        <td class="px-4 py-3">
+                            <span class="text-green-600">✅</span>
+                        </td>
+                    `;
+                    tableBody.appendChild(row);
+
+                    // 작은 딜레이 (서버 부하 방지)
+                    await new Promise(resolve => setTimeout(resolve, 50));
+
+                } catch (error) {
+                    log(`❌ ${studentId} 실패: ${error.message}`);
+                    
+                    results.push({
+                        index: i,
+                        studentId: studentId,
+                        error: error.message,
+                        success: false
+                    });
+
+                    // 실패한 행 추가
+                    const row = document.createElement('tr');
+                    row.className = 'hover:bg-gray-50 bg-red-50';
+                    row.innerHTML = `
+                        <td class="px-4 py-3 text-gray-600">${i}</td>
+                        <td class="px-4 py-3 font-mono text-sm">${studentId}</td>
+                        <td class="px-4 py-3 text-red-600" colspan="4">${error.message}</td>
+                        <td class="px-4 py-3">
+                            <span class="text-red-600">❌</span>
+                        </td>
+                    `;
+                    tableBody.appendChild(row);
+                }
+            }
+
+            // 통계 표시
+            displayStats(results, nodeCount);
+            displayDistribution(nodeCount);
+
+            log('✅ 테스트 완료!');
+        }
+
+        function getNodeColor(nodeName) {
+            const hash = nodeName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            return nodeColors[hash % nodeColors.length];
+        }
+
+        function displayStats(results, nodeCount) {
+            const statsDiv = document.getElementById('stats');
+            
+            const successCount = results.filter(r => r.success).length;
+            const failCount = results.filter(r => !r.success).length;
+            const nodeNames = Object.keys(nodeCount);
+
+            statsDiv.innerHTML = `
+                <div class="bg-green-100 rounded-lg p-4">
+                    <div class="text-3xl font-bold text-green-700">${successCount}</div>
+                    <div class="text-sm text-green-600">성공</div>
+                </div>
+                <div class="bg-red-100 rounded-lg p-4">
+                    <div class="text-3xl font-bold text-red-700">${failCount}</div>
+                    <div class="text-sm text-red-600">실패</div>
+                </div>
+                <div class="bg-blue-100 rounded-lg p-4">
+                    <div class="text-3xl font-bold text-blue-700">${nodeNames.length}</div>
+                    <div class="text-sm text-blue-600">활성 노드</div>
+                </div>
+                <div class="bg-purple-100 rounded-lg p-4">
+                    <div class="text-3xl font-bold text-purple-700">${(successCount / results.length * 100).toFixed(1)}%</div>
+                    <div class="text-sm text-purple-600">성공률</div>
+                </div>
+            `;
+        }
+
+        function displayDistribution(nodeCount) {
+            const distributionDiv = document.getElementById('distribution');
+            const total = Object.values(nodeCount).reduce((a, b) => a + b, 0);
+
+            const bars = Object.entries(nodeCount).map(([nodeName, count]) => {
+                const percentage = (count / total * 100).toFixed(1);
+                return `
+                    <div class="mb-4">
+                        <div class="flex justify-between mb-1">
+                            <span class="text-sm font-medium text-gray-700">${nodeName}</span>
+                            <span class="text-sm text-gray-600">${count}명 (${percentage}%)</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-6">
+                            <div class="${getNodeColor(nodeName)} h-6 rounded-full flex items-center justify-center text-white text-xs font-semibold transition-all duration-500" style="width: ${percentage}%">
+                                ${percentage}%
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            distributionDiv.innerHTML = `
+                <h3 class="text-lg font-semibold mb-3 text-gray-800">노드별 학생 분산</h3>
+                ${bars}
+            `;
+        }
+    </script>
+</body>
+</html>
