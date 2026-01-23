@@ -291,15 +291,33 @@
 
                 // 트랙 수신
                 pc.ontrack = (event) => {
+                    log(`[${studentId}] 📥 트랙 수신: ${event.track.kind}, readyState: ${event.track.readyState}`);
                     if (event.streams && event.streams.length > 0) {
                         videoElement.srcObject = event.streams[0];
-                        loadingOverlay.style.display = 'none';
-                        log(`[${studentId}] ✅ 영상 수신 시작`);
+                        log(`[${studentId}] ✅ 비디오 srcObject 설정 완료`);
+                        
+                        // 비디오 재생 시도
+                        setTimeout(() => {
+                            videoElement.play()
+                                .then(() => {
+                                    loadingOverlay.style.display = 'none';
+                                    log(`[${studentId}] ▶️ 재생 시작`);
+                                })
+                                .catch(err => {
+                                    log(`[${studentId}] ⚠️ 재생 실패: ${err.message}`);
+                                });
+                        }, 100);
                     }
                 };
 
                 // ICE 연결 상태
                 pc.oniceconnectionstatechange = () => {
+                    log(`[${studentId}] ICE 상태: ${pc.iceConnectionState}`);
+                    
+                    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                        log(`[${studentId}] 🎉 ICE 연결 성공`);
+                    }
+                    
                     if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
                         log(`[${studentId}] ❌ 연결 실패/끊김: ${pc.iceConnectionState}`);
                         loadingOverlay.innerHTML = '<div><div class="text-red-500 text-2xl mb-2">❌</div><div>연결 실패</div></div>';
@@ -311,9 +329,13 @@
                 pc.addTransceiver('video', { direction: 'recvonly' });
                 pc.addTransceiver('audio', { direction: 'recvonly' });
 
+                log(`[${studentId}] Transceiver 추가 완료`);
+
                 // Offer 생성 및 전송
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
+
+                log(`[${studentId}] Offer 생성 완료, WHEP 요청: ${webrtcUrl}`);
 
                 const whepResponse = await fetch(webrtcUrl, {
                     method: 'POST',
@@ -322,11 +344,14 @@
                 });
 
                 if (!whepResponse.ok) {
-                    throw new Error(`WHEP 요청 실패: ${whepResponse.status}`);
+                    throw new Error(`WHEP 요청 실패: ${whepResponse.status} ${whepResponse.statusText}`);
                 }
 
                 const answerSdp = await whepResponse.text();
+                log(`[${studentId}] Answer 수신 완료 (${answerSdp.length} bytes)`);
+                
                 await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+                log(`[${studentId}] RemoteDescription 설정 완료, ICE 협상 중...`);
 
                 // 뷰어 저장
                 viewers.push({
