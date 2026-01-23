@@ -103,6 +103,7 @@ class ClusterManager:
         self.nodes: Dict[str, NodeInfo] = {}
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.stream_assignments: Dict[str, str] = {}  # stream_id -> node_id mapping
+        self.main_node_id: Optional[str] = None  # 메인 노드 자신의 ID
 
     async def start(self):
         """클러스터 관리자 시작"""
@@ -285,12 +286,42 @@ class ClusterManager:
         }
 
     async def _check_health(self):
-        """주기적으로 노드 헬스 체크"""
+        """주기적으로 노드 헬스 체크 및 메인 노드 상태 업데이트"""
         while True:
             try:
                 await asyncio.sleep(10)  # 10초마다
 
+                # 메인 노드 자신의 연결 수 업데이트
+                if self.main_node_id and self.main_node_id in self.nodes:
+                    try:
+                        main_node = self.nodes[self.main_node_id]
+                        async with httpx.AsyncClient(timeout=2.0) as client:
+                            # MediaMTX API로 현재 연결 수 조회
+                            response = await client.get(
+                                f"http://{main_node.host}:{main_node.webrtc_port}/v3/paths/list"
+                            )
+                            if response.status_code == 200:
+                                data = response.json()
+                                # readers 수를 합산
+                                total_readers = 0
+                                if "items" in data:
+                                    for item in data["items"]:
+                                        total_readers += item.get("readers", 0)
+
+                                main_node.current_connections = total_readers
+                                main_node.last_heartbeat = datetime.now()
+                                logger.debug(
+                                    f"📊 Main node connections: {total_readers}"
+                                )
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to update main node stats: {e}")
+
+                # Sub 노드들 헬스 체크
                 for node_id, node in list(self.nodes.items()):
+                    # 메인 노드는 스킵 (위에서 이미 처리)
+                    if node_id == self.main_node_id:
+                        continue
+
                     # 30초 이상 heartbeat 없으면 offline
                     age = datetime.now() - node.last_heartbeat
                     if age > timedelta(seconds=30):
@@ -475,6 +506,26 @@ async def init_cluster_mode():
         # Main Node 모드
         logger.info("🎯 Starting in MAIN NODE mode")
         await cluster_manager.start()
+
+        # 메인 노드 자신도 로드밸런싱 풀에 추가
+        main_node_id = os.getenv("NODE_ID", "main")
+        main_node_info = NodeInfo(
+            node_id=main_node_id,
+            node_name=os.getenv("NODE_NAME", "main"),
+            host=os.getenv("NODE_HOST", "10.100.0.146"),
+            port=int(os.getenv("NODE_PORT", "8000")),
+            rtmp_port=int(os.getenv("RTMP_PORT", "1935")),
+            webrtc_port=int(os.getenv("WEBRTC_PORT", "8889")),
+            max_connections=int(os.getenv("MAX_CONNECTIONS", "150")),
+            current_connections=0,
+            cpu_usage=0.0,
+            memory_usage=0.0,
+            status="healthy",
+            last_heartbeat=datetime.now(),
+        )
+        cluster_manager.register_node(main_node_info)
+        cluster_manager.main_node_id = main_node_id  # 메인 노드 ID 저장
+        logger.info("✅ Main node added to load balancing pool")
 
         # mDNS 광고 시작 (선택사항 - 실패해도 계속 진행)
         try:
