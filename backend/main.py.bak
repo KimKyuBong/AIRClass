@@ -1,6 +1,6 @@
 """
 AIRClass Backend Server
-FastAPI + MediaMTX를 사용한 실시간 WebRTC 스트리밍 백엔드
+FastAPI + MediaMTX를 사용한 실시간 HLS 스트리밍 백엔드
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
@@ -18,8 +18,7 @@ import socket
 import qrcode
 import io
 from datetime import datetime, timedelta
-from cluster import cluster_manager, init_cluster_mode, shutdown_cluster, NodeInfo
-from config import CORS_ORIGINS, SERVER_IP
+from cluster import cluster_manager, init_cluster_mode, shutdown_cluster
 from prometheus_client import (
     Counter,
     Gauge,
@@ -34,29 +33,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AIRClass Backend Server",
-    description="Real-time WebRTC streaming with multi-node cluster support",
+    description="Real-time HLS streaming with chat support",
     version="2.0.0",
 )
 
-# CORS 설정 - config에서 가져오기
-# CORS_ORIGINS가 ["*"]인 경우 credentials를 False로 설정
-# 그렇지 않으면 특정 origin에 대해 credentials를 True로 설정
-if CORS_ORIGINS == ["*"]:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,  # "*"일 때는 False여야 함
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ============================================
 # Prometheus Metrics
@@ -79,8 +67,8 @@ active_streams = Gauge("airclass_active_streams", "Number of active streams")
 
 active_connections = Gauge(
     "airclass_active_connections",
-    "Number of active WebSocket connections",
-    ["type"],  # teacher, student, monitor
+    "Number of active WebSocket/HLS connections",
+    ["type"],  # teacher, student, monitor, hls
 )
 
 tokens_issued_total = Counter(
@@ -214,7 +202,7 @@ manager = ConnectionManager()
 
 
 def start_mediamtx():
-    """MediaMTX RTMP/WebRTC 서버 시작"""
+    """MediaMTX RTMP/HLS 서버 시작"""
     global mediamtx_process
 
     if mediamtx_process is None:
@@ -224,7 +212,7 @@ def start_mediamtx():
         )
         print(f"✅ MediaMTX started (PID: {mediamtx_process.pid})")
         print("📡 RTMP: rtmp://localhost:1935/live/stream")
-        print("🎬 WebRTC: http://localhost:8889/live/stream/whep")
+        print("🎬 HLS: http://localhost:8888/live/stream/index.m3u8")
 
 
 def stop_mediamtx():
@@ -333,13 +321,13 @@ def generate_stream_token(user_type: str, user_id: str) -> str:
 def verify_token(token: str) -> Optional[dict]:
     """토큰 검증"""
     try:
-        # JWT 검증만 수행 (active_tokens는 Main에서만 관리하므로 Sub에서는 체크하지 않음)
+        # JWT 검증만 수행 (active_tokens는 Master에서만 관리하므로 Slave에서는 체크하지 않음)
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         print(f"[verify_token] ✅ Token valid. Payload: {payload}")
         return payload
     except jwt.ExpiredSignatureError as e:
         print(f"[verify_token] ❌ Token expired: {e}")
-        # Main에서만 active_tokens 정리
+        # Master에서만 active_tokens 정리
         if token in active_tokens:
             active_tokens.discard(token)
         return None
@@ -357,10 +345,94 @@ async def root():
         "version": "2.0.0",
         "mediamtx_running": mediamtx_process is not None,
         "rtmp_url": "rtmp://localhost:1935/live/stream",
-        "webrtc_url": "http://localhost:8889/live/stream/whep",
+        "hls_url": "http://localhost:8888/live/stream/index.m3u8",
         "frontend_url": "http://localhost:5173",
-        "security": "JWT token required for WebRTC access",
+        "security": "JWT token required for HLS access",
     }
+
+
+async def get_external_hls_port(node_id: str) -> Optional[int]:
+    """
+    Docker 컨테이너의 외부에 매핑된 HLS 포트를 찾습니다.
+
+    Args:
+        node_id: 노드 ID (예: "slave-e3300a10f9b7")
+
+    Returns:
+        외부 포트 번호 또는 None
+    """
+    try:
+        # node_id에서 컨테이너 호스트명 추출 (slave-HOSTNAME 형식)
+        # Docker Compose는 airclass-slave-1, airclass-slave-2 등의 이름 사용
+        # node_id는 "slave-<hostname>" 형식이므로, 실제 컨테이너는 airclass-slave-* 패턴
+
+        # 모든 slave 컨테이너의 포트 매핑 확인
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--filter",
+                "name=airclass-slave",
+                "--format",
+                "{{.Names}}\t{{.Ports}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Failed to get docker containers: {result.stderr}")
+            return None
+
+        # 각 컨테이너의 포트 매핑 파싱
+        # 출력 예: "airclass-slave-1\t0.0.0.0:60064->8888/tcp, ..."
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+
+            container_name = parts[0]
+            ports_str = parts[1]
+
+            # node_id의 hostname 부분과 컨테이너 호스트명 매칭 확인
+            # docker exec로 컨테이너의 HOSTNAME 환경변수 확인
+            hostname_check = subprocess.run(
+                ["docker", "exec", container_name, "hostname"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+
+            if hostname_check.returncode == 0:
+                container_hostname = hostname_check.stdout.strip()
+                expected_node_id = f"slave-{container_hostname}"
+
+                if expected_node_id == node_id:
+                    # 이 컨테이너가 맞음! 8888 포트의 외부 매핑 찾기
+                    # 포트 형식: "0.0.0.0:60064->8888/tcp"
+                    import re
+
+                    match = re.search(r"0\.0\.0\.0:(\d+)->8888/tcp", ports_str)
+                    if match:
+                        external_port = int(match.group(1))
+                        logger.info(
+                            f"Found external HLS port for {node_id}: {external_port}"
+                        )
+                        return external_port
+
+        logger.warning(f"Could not find external port mapping for node {node_id}")
+        return None
+
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout while querying Docker containers")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting external HLS port: {e}")
+        return None
 
 
 @app.post("/api/auth/mediamtx")
@@ -387,7 +459,7 @@ async def mediamtx_auth(request: dict):
         print(f"[MediaMTX Auth] ✅ Allowing RTMP publish")
         return {"status": "ok"}
 
-    # Main 모드: 내부 프록시 스크립트의 RTMP read 허용 (localhost에서만)
+    # Master 모드: 내부 프록시 스크립트의 RTMP read 허용 (localhost에서만)
     if action == "read" and protocol == "rtmp":
         ip = request.get("ip", "")
         if ip in ["127.0.0.1", "::1", "localhost"]:
@@ -397,10 +469,39 @@ async def mediamtx_auth(request: dict):
             print(f"[MediaMTX Auth] ❌ RTMP read denied - not from localhost (ip={ip})")
             raise HTTPException(status_code=403, detail="RTMP read not allowed")
 
-    # Main 모드: 내부 FFmpeg의 RTSP read 허용 (모든 localhost 연결)
+    # Master 모드: 내부 FFmpeg의 RTSP read 허용 (모든 localhost 연결)
     # FFmpeg 프록시는 항상 localhost에서만 실행되므로 RTSP read는 모두 허용
     if action == "read" and protocol == "rtsp":
         print(f"[MediaMTX Auth] ✅ Allowing internal RTSP read (FFmpeg proxy)")
+        return {"status": "ok"}
+
+    # HLS read는 JWT 토큰 필요
+    if action == "read" and protocol == "hls":
+        # query에서 jwt 파라미터 추출
+        token = None
+        if "jwt=" in query:
+            # 첫 번째 jwt= 값만 추출 (중복 방지)
+            token = query.split("jwt=")[1].split("&")[0]
+            print(f"[MediaMTX Auth] Extracted JWT token: {token[:50]}...")
+
+        if not token:
+            print(f"[MediaMTX Auth] ❌ HLS read denied - no token")
+            raise HTTPException(status_code=401, detail="Token required")
+
+        # 토큰 검증
+        payload = verify_token(token)
+        if not payload:
+            print(f"[MediaMTX Auth] ❌ HLS read denied - invalid token")
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+        # path 검증
+        if payload.get("path") != path:
+            print(
+                f"[MediaMTX Auth] ❌ HLS read denied - path mismatch (expected: {payload.get('path')}, got: {path})"
+            )
+            raise HTTPException(status_code=403, detail="Path mismatch")
+
+        print(f"[MediaMTX Auth] ✅ Allowing HLS read for {payload.get('user_id')}")
         return {"status": "ok"}
 
     # WebRTC read는 JWT 토큰 필요
@@ -470,8 +571,8 @@ async def websocket_teacher(websocket: WebSocket):
                             target, {"type": "control", "command": command}
                         )
 
-            # Note: Screen data is now handled by MediaMTX WebRTC streaming
-            # Android app sends RTMP to MediaMTX, clients play WebRTC directly
+            # Note: Screen data is now handled by MediaMTX HLS streaming
+            # Android app sends RTMP to MediaMTX, clients play HLS directly
 
     except WebSocketDisconnect:
         manager.disconnect_teacher()
@@ -486,7 +587,8 @@ async def websocket_student(websocket: WebSocket, name: str):
     await manager.connect_student(websocket, name)
 
     try:
-        # Note: Students now receive video via WebRTC stream from MediaMTX
+        # Note: Students now receive video via HLS stream from MediaMTX
+        # URL: http://localhost:8888/live/stream/index.m3u8
 
         while True:
             data = await websocket.receive_text()
@@ -521,7 +623,8 @@ async def websocket_monitor(websocket: WebSocket):
     await manager.connect_monitor(websocket)
 
     try:
-        # Note: Monitors now receive video via WebRTC stream from MediaMTX
+        # Note: Monitors now receive video via HLS stream from MediaMTX
+        # URL: http://localhost:8888/live/stream/index.m3u8
 
         while True:
             # 모니터는 데이터를 보내지 않고 수신만 함
@@ -540,47 +643,20 @@ async def websocket_monitor(websocket: WebSocket):
 
 
 # ============================================================
-# Cluster Management APIs (Main/Sub)
+# Cluster Management APIs (Master/Slave)
 # ============================================================
 
 
 @app.post("/cluster/register")
 async def register_node(request: Request):
-    """Sub 노드 등록 (HMAC 인증)"""
+    """Slave 노드 등록 (Master only)"""
     mode = os.getenv("MODE", "standalone")
-    if mode != "main":
-        raise HTTPException(status_code=403, detail="Only main can register nodes")
+    if mode != "master":
+        raise HTTPException(status_code=403, detail="Only master can register nodes")
 
     data = await request.json()
-
-    # HMAC 인증 검증
-    cluster_secret = os.getenv("CLUSTER_SECRET", "")
-    if not cluster_secret:
-        logger.error("❌ CLUSTER_SECRET not set in Main node!")
-        raise HTTPException(status_code=500, detail="Server configuration error")
-
-    provided_token = data.get("auth_token")
-    timestamp = data.get("timestamp")
-
-    if not provided_token or not timestamp:
-        logger.warning("⚠️ Registration attempt without auth_token or timestamp")
-        raise HTTPException(status_code=403, detail="Authentication required")
-
-    # HMAC 검증
-    from cluster import verify_cluster_auth_token
-
-    if not verify_cluster_auth_token(cluster_secret, timestamp, provided_token):
-        logger.warning(
-            f"⚠️ Authentication failed for node: {data.get('node_name', 'unknown')}"
-        )
-        logger.warning("   CLUSTER_SECRET이 일치하지 않습니다")
-        raise HTTPException(
-            status_code=403, detail="Authentication failed: CLUSTER_SECRET mismatch"
-        )
-
-    # 인증 성공 - auth_token과 timestamp는 NodeInfo에 없으므로 제거
-    data.pop("auth_token", None)
-    data.pop("timestamp", None)
+    from cluster import NodeInfo
+    from datetime import datetime
 
     # last_heartbeat을 ISO string에서 datetime으로 변환
     if "last_heartbeat" in data and isinstance(data["last_heartbeat"], str):
@@ -588,16 +664,15 @@ async def register_node(request: Request):
 
     node = NodeInfo(**data)
     cluster_manager.register_node(node)
-    logger.info(f"✅ Node authenticated and registered: {node.node_name}")
     return {"status": "registered", "node_id": node.node_id}
 
 
 @app.post("/cluster/unregister")
 async def unregister_node(request: Request):
-    """Sub 노드 등록 해제 (Main only)"""
+    """Slave 노드 등록 해제 (Master only)"""
     mode = os.getenv("MODE", "standalone")
-    if mode != "main":
-        raise HTTPException(status_code=403, detail="Only main can unregister nodes")
+    if mode != "master":
+        raise HTTPException(status_code=403, detail="Only master can unregister nodes")
 
     data = await request.json()
     node_id = data.get("node_id")
@@ -611,57 +686,57 @@ async def unregister_node(request: Request):
 
 @app.post("/cluster/stats")
 async def update_node_stats(request: Request):
-    """노드 통계 업데이트 (Sub → Main, HMAC 인증)"""
+    """노드 통계 업데이트 (Slave → Master)"""
     mode = os.getenv("MODE", "standalone")
-    if mode != "main":
-        raise HTTPException(status_code=403, detail="Only main can receive stats")
+    if mode != "master":
+        raise HTTPException(status_code=403, detail="Only master can receive stats")
 
     data = await request.json()
-
-    # HMAC 인증 검증
-    cluster_secret = os.getenv("CLUSTER_SECRET", "")
-    if not cluster_secret:
-        raise HTTPException(status_code=500, detail="Server configuration error")
-
-    provided_token = data.get("auth_token")
-    timestamp = data.get("timestamp")
-
-    if not provided_token or not timestamp:
-        raise HTTPException(status_code=403, detail="Authentication required")
-
-    # HMAC 검증
-    from cluster import verify_cluster_auth_token
-
-    if not verify_cluster_auth_token(cluster_secret, timestamp, provided_token):
-        logger.warning(
-            f"⚠️ Stats authentication failed for node: {data.get('node_id', 'unknown')}"
-        )
-        raise HTTPException(status_code=403, detail="Authentication failed")
-
-    # 인증 성공
     node_id = data.get("node_id")
     stats = data.get("stats", {})
 
     success = cluster_manager.update_node_stats(node_id, stats)
-
-    if not success:
+    if success:
+        return {"status": "updated"}
+    else:
         raise HTTPException(status_code=404, detail="Node not found")
-
-    return {"status": "updated"}
 
 
 @app.get("/cluster/nodes")
 async def get_cluster_nodes():
     """클러스터 노드 목록 조회"""
     mode = os.getenv("MODE", "standalone")
-    if mode != "main":
-        raise HTTPException(status_code=403, detail="Only main has cluster info")
+    if mode != "master":
+        raise HTTPException(status_code=403, detail="Only master has cluster info")
 
     return cluster_manager.get_cluster_stats()
 
 
+@app.get("/cluster/best-node")
+async def get_best_node():
+    """최적의 노드 선택 (로드 밸런싱)"""
+    mode = os.getenv("MODE", "standalone")
+    if mode != "master":
+        raise HTTPException(status_code=403, detail="Only master can route")
+
+    node = cluster_manager.get_least_loaded_node()
+    if not node:
+        raise HTTPException(status_code=503, detail="No healthy nodes available")
+
+    return {
+        "node_id": node.node_id,
+        "node_name": node.node_name,
+        "rtmp_url": node.rtmp_url,
+        "hls_url": node.hls_url,
+        "api_url": node.api_url,
+        "load_percentage": node.load_percentage,
+        "current_connections": node.current_connections,
+        "max_connections": node.max_connections,
+    }
+
+
 # ============================================================
-# Token API for Cluster Mode
+# Modified Token API for Cluster Mode
 # ============================================================
 
 
@@ -670,29 +745,26 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
     """
     스트림 접근 토큰 발급 (클러스터 지원)
 
-    Main 모드: 최적의 Sub 노드로 리다이렉트
-    Sub/Standalone 모드: 직접 토큰 발급
+    Master 모드: 최적의 Slave 노드로 리다이렉트
+    Slave/Standalone 모드: 직접 토큰 발급
     """
     mode = os.getenv("MODE", "standalone")
 
-    # Production: Load balancing enabled by default
-    # Set USE_MAIN_WEBRTC=true to bypass load balancing (development only)
-    use_main_webrtc = os.getenv("USE_MAIN_WEBRTC", "false").lower() == "true"
+    # DEVELOPMENT: Master에서 직접 WebRTC 제공 (NAT 문제 회피)
+    use_master_webrtc = os.getenv("USE_MASTER_WEBRTC", "true").lower() == "true"
 
-    # Teacher는 항상 Main 노드에 연결 (RTMP 스트리밍 소스이므로)
-    # Student만 Sub 노드로 로드 밸런싱
-    if mode == "main" and not use_main_webrtc and user_type == "student":
-        # Rendezvous Hashing을 사용하여 user_id 기반 일관성 있는 노드 선택
-        node = cluster_manager.get_node_for_stream(user_id, use_sticky=True)
+    # Master 모드: 최적의 Slave 선택하여 리다이렉트
+    if mode == "master" and not use_master_webrtc:
+        node = cluster_manager.get_least_loaded_node()
         if not node:
             raise HTTPException(status_code=503, detail="No healthy nodes available")
 
-        # Sub의 토큰 발급 엔드포인트로 리다이렉트
+        # Slave의 토큰 발급 엔드포인트로 리다이렉트
         redirect_url = (
             f"{node.api_url}/api/token?user_type={user_type}&user_id={user_id}"
         )
 
-        # 직접 Sub에 요청하여 토큰 받기
+        # 직접 Slave에 요청하여 토큰 받기
         import httpx
         import re
 
@@ -702,7 +774,7 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
                 if response.status_code == 200:
                     data = response.json()
 
-                    # Docker 외부 접근을 위해 호스트에 매핑된 포트 찾기 (WebRTC)
+                    # Docker 외부 접근을 위해 호스트에 매핑된 포트 찾기 (HLS & WebRTC)
                     try:
                         # Get Docker container port mappings
                         result = subprocess.run(
@@ -710,7 +782,7 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
                                 "docker",
                                 "ps",
                                 "--filter",
-                                "name=airclass-sub",
+                                "name=airclass-slave",
                                 "--format",
                                 "{{.Names}}\t{{.Ports}}",
                             ],
@@ -742,32 +814,45 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
 
                                 if hostname_check.returncode == 0:
                                     container_hostname = hostname_check.stdout.strip()
-                                    expected_node_id = f"sub-{container_hostname}"
+                                    expected_node_id = f"slave-{container_hostname}"
 
                                     if expected_node_id == node.node_id:
-                                        # Extract external port for WebRTC (8889)
+                                        # Extract external ports for HLS (8888) and WebRTC (8889)
+                                        hls_match = re.search(
+                                            r"0\.0\.0\.0:(\d+)->8888/tcp", ports_str
+                                        )
                                         webrtc_match = re.search(
                                             r"0\.0\.0\.0:(\d+)->8889/tcp", ports_str
                                         )
 
-                                        if webrtc_match:
-                                            external_webrtc_port = webrtc_match.group(1)
-                                            # Rewrite WebRTC URL to use server IP with external port
+                                        if hls_match:
+                                            external_hls_port = hls_match.group(1)
+                                            # Rewrite HLS URL to use localhost with external port
                                             token = data.get("token", "")
-                                            # Use SERVER_IP from config (set via environment variable)
-                                            data["webrtc_url"] = (
-                                                f"http://{SERVER_IP}:{external_webrtc_port}/live/stream/whep?jwt={token}"
+                                            data["hls_url"] = (
+                                                f"http://localhost:{external_hls_port}/live/stream/index.m3u8?jwt={token}"
                                             )
                                             logger.info(
-                                                f"Rewrote WebRTC URL to use server IP {SERVER_IP} and external port {external_webrtc_port}"
+                                                f"Rewrote HLS URL to use external port {external_hls_port}"
+                                            )
+
+                                        if webrtc_match:
+                                            external_webrtc_port = webrtc_match.group(1)
+                                            # Rewrite WebRTC URL to use localhost with external port
+                                            token = data.get("token", "")
+                                            data["webrtc_url"] = (
+                                                f"http://localhost:{external_webrtc_port}/live/stream/whep?jwt={token}"
+                                            )
+                                            logger.info(
+                                                f"Rewrote WebRTC URL to use external port {external_webrtc_port}"
                                             )
 
                                         break
                     except Exception as e:
                         logger.error(f"Error finding external ports: {e}")
 
-                    # Main 정보 추가
-                    data["routed_by"] = "main"
+                    # Master 정보 추가
+                    data["routed_by"] = "master"
                     data["node_id"] = node.node_id
                     data["node_name"] = node.node_name
                     return data
@@ -780,7 +865,7 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
                     status_code=503, detail=f"Node communication error: {str(e)}"
                 )
 
-    # Sub/Standalone 모드: 기존 로직 (직접 토큰 발급)
+    # Slave/Standalone 모드: 기존 로직 (직접 토큰 발급)
     if user_type not in ["teacher", "student", "monitor"]:
         raise HTTPException(status_code=400, detail="Invalid user_type")
 
@@ -792,18 +877,21 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
     # Track token issuance
     tokens_issued_total.labels(user_type=user_type).inc()
 
-    # WebRTC URL 생성 (Sub는 자신의 주소 반환)
+    # HLS URL 생성 (Slave는 자신의 주소 반환)
     node_host = os.getenv("NODE_HOST", "localhost")
+    hls_port = os.getenv("HLS_PORT", "8888")
     webrtc_port = os.getenv("WEBRTC_PORT", "8889")
 
-    # Main 모드에서는 서버 IP 사용 (내부 네트워크 접근 가능)
-    if mode == "main":
-        node_host = SERVER_IP
+    # Master 모드에서는 localhost 사용 (Docker 외부 접근)
+    if mode == "master":
+        node_host = "localhost"
 
+    hls_url = f"http://{node_host}:{hls_port}/live/stream/index.m3u8?jwt={token}"
     webrtc_url = f"http://{node_host}:{webrtc_port}/live/stream/whep?jwt={token}"
 
     return {
         "token": token,
+        "hls_url": hls_url,
         "webrtc_url": webrtc_url,
         "expires_in": JWT_EXPIRATION_MINUTES * 60,
         "user_type": user_type,
@@ -824,7 +912,7 @@ async def health_check():
 
     Returns:
         - status: healthy/degraded
-        - mode: main/sub/standalone
+        - mode: master/slave/standalone
         - stream_active: MediaMTX에서 스트림을 받고 있는지 여부
         - timestamp: 현재 시간
     """
@@ -883,9 +971,9 @@ async def metrics():
     active_connections.labels(type="student").set(len(manager.students))
     active_connections.labels(type="monitor").set(len(manager.monitors))
 
-    # Update cluster metrics if in main mode
+    # Update cluster metrics if in master mode
     mode = os.getenv("MODE", "standalone")
-    if mode == "main" and cluster_manager:
+    if mode == "master" and cluster_manager:
         # Count nodes by status
         active_nodes = sum(
             1 for n in cluster_manager.nodes.values() if n.status == "active"
@@ -921,107 +1009,12 @@ async def get_status():
         "students_count": len(manager.students),
         "students": list(manager.students.keys()),
         "monitors_count": len(manager.monitors),
+        "hls_stream_url": "http://localhost:8888/live/stream/index.m3u8",
     }
-
-    return status_data
-
-
-@app.get("/api/viewers")
-async def get_viewers():
-    """Get current WebRTC viewers from MediaMTX with node distribution"""
-    try:
-        import httpx
-
-        mode = os.getenv("MODE", "standalone")
-
-        # Get viewers from main node MediaMTX
-        mediamtx_url = "http://127.0.0.1:9997/v3/paths/list"
-
-        total_viewers = 0
-        viewers_list = []
-        node_stats = {}
-
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            # Get main node viewers
-            response = await client.get(mediamtx_url)
-
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get("items", [])
-
-                # Find the live/stream path
-                for item in items:
-                    if item.get("name") == "live/stream":
-                        readers = item.get("readers", [])
-                        main_viewer_count = len(readers)
-                        total_viewers += main_viewer_count
-
-                        # Add main node viewers
-                        for r in readers:
-                            viewers_list.append(
-                                {
-                                    "id": r.get("id", "unknown"),
-                                    "connected_at": r.get("created", ""),
-                                    "type": "webrtc",
-                                    "node": "main",
-                                }
-                            )
-
-                        # Main node stats
-                        node_stats["main"] = {
-                            "name": "main",
-                            "viewers": main_viewer_count,
-                            "capacity": 150,
-                            "load_percent": round((main_viewer_count / 150) * 100, 1),
-                            "status": "active",
-                        }
-
-                        stream_ready = item.get("ready", False)
-                        break
-                else:
-                    stream_ready = False
-            else:
-                stream_ready = False
-
-            # Get sub node information from cluster manager
-            if mode == "main" and cluster_manager:
-                sub_nodes = cluster_manager.get_all_nodes()
-
-                for node in sub_nodes:
-                    node_name = node.get("node_name", "unknown")
-                    # In development, sub nodes don't handle viewers yet
-                    # This is a placeholder for future distributed viewer handling
-                    node_stats[node_name] = {
-                        "name": node_name,
-                        "viewers": 0,
-                        "capacity": 150,
-                        "load_percent": 0.0,
-                        "status": "standby",
-                        "webrtc_port": node.get("webrtc_port", "unknown"),
-                    }
-
-        return {
-            "total_viewers": total_viewers,
-            "viewers": viewers_list,
-            "stream_ready": stream_ready,
-            "node_stats": node_stats,
-            "cluster_mode": mode,
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to get viewers from MediaMTX: {e}")
-        return {
-            "total_viewers": 0,
-            "viewers": [],
-            "stream_ready": False,
-            "node_stats": {},
-            "cluster_mode": "unknown",
-            "error": str(e),
-        }
 
 
 # Note: /api/screen endpoint removed - Android app now sends RTMP directly to MediaMTX
-# MediaMTX converts RTMP to WebRTC automatically
+# MediaMTX converts RTMP to HLS automatically at http://localhost:8888/live/stream/index.m3u8
 
 
 if __name__ == "__main__":
@@ -1031,7 +1024,7 @@ if __name__ == "__main__":
     print("🎓 AIRClass Backend Server v2.0.0")
     print("=" * 60)
     print("📡 RTMP: rtmp://localhost:1935/live/stream")
-    print("🎬 WebRTC: http://localhost:8889/live/stream/whep")
+    print("🎬 HLS: http://localhost:8888/live/stream/index.m3u8")
     print("🌐 API: http://localhost:8000")
     print("🖥️  Frontend: http://localhost:5173")
     print("=" * 60)

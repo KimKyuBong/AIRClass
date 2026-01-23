@@ -1,0 +1,61 @@
+# AIRClass Main MediaMTX Configuration
+# RTMP 스트림을 받아서 최적의 Sub로 프록시
+
+logLevel: info
+logDestinations: [stdout]
+
+# Ultra-low latency settings
+readTimeout: 30s  # Longer timeout to handle network issues
+writeTimeout: 30s
+readBufferCount: 256  # Further reduced from 512 for minimum latency
+udpMaxPayloadSize: 1472  # Optimize for network MTU
+
+# RTMP 서버 활성화 (Android 앱으로부터 스트림 수신)
+rtmp: yes
+rtmpAddress: :1935
+
+# HLS 서버 비활성화 (Main는 프록시만 수행)
+hls: no
+
+# 인증
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8000/api/auth/mediamtx
+
+# 기타 프로토콜 설정
+rtsp: yes
+rtspAddress: :8554
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcAllowOrigin: '*'
+webrtcAdditionalHosts: []
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+srt: no
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: no
+pprof: no
+playback: no
+
+# Path 설정
+pathDefaults:
+  # Publisher는 허용
+  source: publisher
+  # 한 명만 publish 가능
+  overridePublisher: yes
+
+paths:
+  # live/stream: Android 앱에서 받은 RTMP를 Sub 노드들로 전달
+  live/stream:
+    # RTMP로 publish 받기
+    source: publisher
+    overridePublisher: yes
+    
+    # 스트림이 준비되면 모든 Sub 노드로 전달
+    # Sub 노드들은 자동 발견되므로 동적으로 처리
+    runOnReady: echo "Stream ready on Main, Sub nodes will pull via redirect"
+    
+  all_others:

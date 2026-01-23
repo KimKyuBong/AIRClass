@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIRClass - 실제 WebRTC 시청자 부하 테스트</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button.danger {
+            background: #f44336;
+        }
+        button.danger:hover {
+            background: #da190b;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #4CAF50;
+        }
+        .stat-card h3 {
+            margin: 0 0 5px 0;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+        }
+        .viewers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+            max-height: 800px;
+            overflow-y: auto;
+        }
+        .viewer-card {
+            background: #f9f9f9;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            padding: 5px;
+            position: relative;
+        }
+        .viewer-card.connected {
+            border-color: #4CAF50;
+        }
+        .viewer-card.error {
+            border-color: #f44336;
+        }
+        .viewer-card video {
+            width: 100%;
+            height: 200px;
+            background: #000;
+            border-radius: 2px;
+            object-fit: contain;
+            display: block;
+        }
+        .viewer-card .info {
+            font-size: 10px;
+            margin-top: 3px;
+            color: #666;
+        }
+        .viewer-card .status {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #999;
+        }
+        .viewer-card.connected .status {
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+        .viewer-card.error .status {
+            background: #f44336;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .log {
+            background: #1e1e1e;
+            color: #ddd;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .log .error { color: #f44336; }
+        .log .success { color: #4CAF50; }
+        .log .info { color: #2196F3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 AIRClass - 실제 WebRTC 시청자 부하 테스트</h1>
+        
+        <div class="controls">
+            <input type="number" id="numViewers" value="10" min="1" max="400" placeholder="시청자 수">
+            <button onclick="startTest()">시청자 연결 시작</button>
+            <button class="danger" onclick="stopAll()">모두 종료</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <h3>연결 중</h3>
+                <div class="value" id="connectedCount">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>연결 실패</h3>
+                <div class="value" id="failedCount">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>총 시청자</h3>
+                <div class="value" id="totalCount">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>경과 시간</h3>
+                <div class="value" id="elapsedTime">0s</div>
+            </div>
+            <div class="stat-card">
+                <h3>노드 분산</h3>
+                <div class="value" id="nodeDistribution" style="font-size: 12px;">-</div>
+            </div>
+        </div>
+
+        <div class="viewers-grid" id="viewersGrid"></div>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        const viewers = new Map();
+        let connectedCount = 0;
+        let failedCount = 0;
+        let startTime = null;
+        let timerInterval = null;
+
+        let logCount = 0;
+        const MAX_LOG_LINES = 100;
+        
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(line);
+            
+            // Limit log lines for performance
+            logCount++;
+            if (logCount > MAX_LOG_LINES) {
+                logDiv.removeChild(logDiv.firstChild);
+            } else {
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+        }
+
+        function updateStats() {
+            document.getElementById('connectedCount').textContent = connectedCount;
+            document.getElementById('failedCount').textContent = failedCount;
+            document.getElementById('totalCount').textContent = viewers.size;
+            
+            // Calculate node distribution
+            const nodeCount = {};
+            viewers.forEach(viewer => {
+                const node = viewer.nodeName || 'unknown';
+                nodeCount[node] = (nodeCount[node] || 0) + 1;
+            });
+            
+            const distText = Object.entries(nodeCount)
+                .map(([node, count]) => `${node}:${count}`)
+                .join(', ') || '-';
+            document.getElementById('nodeDistribution').textContent = distText;
+        }
+
+        function updateTimer() {
+            if (startTime) {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                document.getElementById('elapsedTime').textContent = elapsed + 's';
+            }
+        }
+
+        async function createViewer(viewerId) {
+            const grid = document.getElementById('viewersGrid');
+            
+            // Create viewer card
+            const card = document.createElement('div');
+            card.className = 'viewer-card';
+            card.id = `viewer-${viewerId}`;
+            card.innerHTML = `
+                <div class="status"></div>
+                <video autoplay muted playsinline></video>
+                <div class="info">시청자 #${viewerId}<br>연결 중...</div>
+            `;
+            grid.appendChild(card);
+
+            const video = card.querySelector('video');
+            const info = card.querySelector('.info');
+
+            try {
+                // 1. Get token
+                log(`[시청자 #${viewerId}] 토큰 요청 중...`, 'info');
+                const tokenResponse = await fetch(
+                    `http://${window.location.hostname}:8000/api/token?user_type=student&user_id=LoadTest-${viewerId}`,
+                    { method: 'POST' }
+                );
+
+                if (!tokenResponse.ok) {
+                    throw new Error(`토큰 발급 실패: ${tokenResponse.status}`);
+                }
+
+                const data = await tokenResponse.json();
+                const webrtcUrl = data.webrtc_url;
+                const nodeName = data.node_name || 'main';
+                log(`[시청자 #${viewerId}] ${nodeName} 노드에 연결`, 'success');
+
+                // 2. Create WebRTC connection
+                const pc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Handle incoming tracks
+                pc.ontrack = (event) => {
+                    if (event.track.kind === 'video') {
+                        log(`[시청자 #${viewerId}] 비디오 트랙 수신`, 'success');
+                    }
+                    if (event.streams && event.streams[0]) {
+                        video.srcObject = event.streams[0];
+                        
+                        // Video playback events
+                        video.onloadedmetadata = () => {
+                            video.play().catch(e => {
+                                log(`[시청자 #${viewerId}] 재생 오류: ${e.message}`, 'error');
+                            });
+                        };
+                        video.onplaying = () => {
+                            log(`[시청자 #${viewerId}] 재생 시작`, 'success');
+                            card.className = 'viewer-card connected';
+                            info.innerHTML = `시청자 #${viewerId}<br>🎬 재생 중 (${data.node_name})`;
+                            if (card.classList.contains('viewer-card') && !card.classList.contains('connected')) {
+                                connectedCount++;
+                                updateStats();
+                            }
+                        };
+                        video.onerror = (e) => {
+                            log(`[시청자 #${viewerId}] 비디오 오류`, 'error');
+                        };
+                    }
+                };
+
+                // Handle ICE connection state
+                pc.oniceconnectionstatechange = () => {
+                    if (pc.iceConnectionState === 'connected') {
+                        log(`[시청자 #${viewerId}] ICE 연결 성공`, 'success');
+                    } else if (pc.iceConnectionState === 'failed') {
+                        log(`[시청자 #${viewerId}] ICE 연결 실패`, 'error');
+                        card.className = 'viewer-card error';
+                        info.innerHTML = `시청자 #${viewerId}<br>❌ ICE 실패`;
+                        failedCount++;
+                        updateStats();
+                    }
+                };
+
+                // Add transceiver for receiving
+                pc.addTransceiver('video', { direction: 'recvonly' });
+                pc.addTransceiver('audio', { direction: 'recvonly' });
+
+                // Create offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // Send offer to WHEP endpoint
+                log(`[시청자 #${viewerId}] WHEP 요청 전송 중...`, 'info');
+                const whepResponse = await fetch(webrtcUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/sdp'
+                    },
+                    body: offer.sdp
+                });
+
+                if (!whepResponse.ok) {
+                    throw new Error(`WHEP 요청 실패: ${whepResponse.status}`);
+                }
+
+                const answerSdp = await whepResponse.text();
+                await pc.setRemoteDescription({
+                    type: 'answer',
+                    sdp: answerSdp
+                });
+
+                // Store viewer
+                viewers.set(viewerId, { pc, card, video, nodeName: data.node_name });
+
+            } catch (error) {
+                log(`[시청자 #${viewerId}] ❌ 오류: ${error.message}`, 'error');
+                card.className = 'viewer-card error';
+                info.innerHTML = `시청자 #${viewerId}<br>❌ 실패`;
+                failedCount++;
+                updateStats();
+            }
+        }
+
+        async function startTest() {
+            const numViewers = parseInt(document.getElementById('numViewers').value);
+            
+            if (numViewers < 1 || numViewers > 400) {
+                alert('시청자 수는 1~400 사이로 설정해주세요.');
+                return;
+            }
+
+            stopAll();
+
+            log(`====== 테스트 시작: ${numViewers}명 시청자 ======`, 'info');
+            startTime = Date.now();
+            timerInterval = setInterval(updateTimer, 1000);
+
+            // Create viewers sequentially with small delay
+            for (let i = 1; i <= numViewers; i++) {
+                createViewer(i);
+                // Small delay to avoid overwhelming the server
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+
+        function stopAll() {
+            log('====== 모든 연결 종료 ======', 'info');
+            
+            // Close all connections
+            viewers.forEach((viewer, id) => {
+                if (viewer.pc) {
+                    viewer.pc.close();
+                }
+                if (viewer.card) {
+                    viewer.card.remove();
+                }
+            });
+
+            viewers.clear();
+            connectedCount = 0;
+            failedCount = 0;
+            updateStats();
+
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            startTime = null;
+            document.getElementById('elapsedTime').textContent = '0s';
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', stopAll);
+
+        log('준비 완료. 시청자 수를 설정하고 "시청자 연결 시작"을 클릭하세요.', 'success');
+    </script>
+</body>
+</html>

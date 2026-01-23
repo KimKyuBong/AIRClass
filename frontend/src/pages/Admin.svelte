@@ -220,7 +220,7 @@
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap">
                     <div class="text-sm text-blue-600">{node.host}:{node.port}</div>
-                    <div class="text-xs text-gray-500">RTMP: {node.rtmp_port} | HLS: {node.hls_port}</div>
+                    <div class="text-xs text-gray-500">RTMP: {node.rtmp_port} | WebRTC: {node.webrtc_port}</div>
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {formatDate(node.last_heartbeat)}

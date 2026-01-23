@@ -1,32 +1,37 @@
-# AIRClass Docker Compose - Master-Slave Architecture
+# AIRClass Docker Compose - Main-Sub Architecture
 # 사용법:
-#   기본 실행 (Master 1대, Slave 3대): docker-compose up
-#   확장: docker-compose up --scale slave=5
+#   기본 실행 (Main 1대, Sub 3대): docker-compose up
+#   확장: docker-compose up --scale sub=5
 #   종료: docker-compose down
 
 version: '3.8'
 
 services:
   # ============================================
-  # Master Node - 요청 라우팅 & 클러스터 관리
+  # Main Node - 요청 라우팅 & 클러스터 관리
   # ============================================
-  master:
+  main:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: airclass-master
+    container_name: airclass-main-node
     environment:
-      MODE: master
-      NODE_NAME: master
-      NODE_HOST: master
-      USE_MASTER_WEBRTC: "true"  # Development: Master에서 직접 WebRTC 제공
-      HLS_PORT: 8888
+      MODE: main
+      NODE_NAME: main
+      NODE_HOST: main
+      USE_MAIN_WEBRTC: "false"  # Load balancing enabled: distribute to Sub nodes
       WEBRTC_PORT: 8889
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      # CORS 설정: 개발 환경에서는 "*", 프로덕션에서는 특정 origin 지정
+      # 예: CORS_ORIGINS=http://192.168.1.100:5173,http://localhost:5173
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      # 서버 IP 주소 (WebRTC URL 생성에 사용)
+      SERVER_IP: ${SERVER_IP:-localhost}
+      # 클러스터 보안 키 (Main-Sub 노드 간 인증)
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
     ports:
       - "8000:8000"  # API 포트
       - "1935:1935"  # RTMP 포트 (Android 앱용)
-      - "8888:8888"  # HLS 포트
       - "8889:8889"  # WebRTC HTTP 포트
       - "8189:8189/udp"  # WebRTC UDP 포트
     volumes:
@@ -41,37 +46,41 @@ services:
       start_period: 30s
     restart: unless-stopped
     labels:
-      - "airclass.role=master"
+      - "airclass.role=main"
 
 
   # ============================================
-  # Slave Nodes - 실제 스트리밍 처리
+  # Sub Nodes - 실제 스트리밍 처리 (고정 포트)
   # ============================================
-  slave:
+  sub-1:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: airclass-sub-1
     environment:
-      MODE: slave
-      MASTER_URL: http://master:8000
-      NODE_NAME: slave-${HOSTNAME}
-      NODE_HOST: ${HOSTNAME:-slave}
+      MODE: sub
+      MAIN_URL: http://main:8000
+      NODE_NAME: sub-1
+      NODE_HOST: sub-1
       NODE_PORT: 8000
       RTMP_PORT: 1935
-      HLS_PORT: 8888
       WEBRTC_PORT: 8889
+      WEBRTC_UDP_PORT: 8190  # 고정 UDP 포트
       MAX_CONNECTIONS: 150
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SERVER_IP: ${SERVER_IP:-localhost}
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
     ports:
-      - "1935"  # RTMP (랜덤 포트)
-      - "8888"  # HLS (랜덤 포트)
-      - "8889"  # WebRTC HTTP (랜덤 포트)
-      - "8189/udp"  # WebRTC UDP (랜덤 포트)
-      - "8000"  # API (랜덤 포트)
+      - "8001:8000"      # API
+      - "8890:8889"      # WebRTC HTTP
+      - "8190:8190/udp"  # WebRTC UDP (같은 포트 매핑)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - airclass-network
     depends_on:
-      master:
+      main:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -81,16 +90,87 @@ services:
       start_period: 30s
     restart: unless-stopped
     labels:
-      - "airclass.role=slave"
-    deploy:
-      # 리소스 제한 (옵션)
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
+      - "airclass.role=sub"
+
+  sub-2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: airclass-sub-2
+    environment:
+      MODE: sub
+      MAIN_URL: http://main:8000
+      NODE_NAME: sub-2
+      NODE_HOST: sub-2
+      NODE_PORT: 8000
+      RTMP_PORT: 1935
+      WEBRTC_PORT: 8889
+      WEBRTC_UDP_PORT: 8191  # 고정 UDP 포트
+      MAX_CONNECTIONS: 150
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SERVER_IP: ${SERVER_IP:-localhost}
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+    ports:
+      - "8002:8000"      # API
+      - "8891:8889"      # WebRTC HTTP
+      - "8191:8191/udp"  # WebRTC UDP (같은 포트 매핑)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - airclass-network
+    depends_on:
+      main:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=sub"
+
+  sub-3:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: airclass-sub-3
+    environment:
+      MODE: sub
+      MAIN_URL: http://main:8000
+      NODE_NAME: sub-3
+      NODE_HOST: sub-3
+      NODE_PORT: 8000
+      RTMP_PORT: 1935
+      WEBRTC_PORT: 8889
+      WEBRTC_UDP_PORT: 8192  # 고정 UDP 포트
+      MAX_CONNECTIONS: 150
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SERVER_IP: ${SERVER_IP:-localhost}
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+    ports:
+      - "8003:8000"      # API
+      - "8892:8889"      # WebRTC HTTP
+      - "8192:8192/udp"  # WebRTC UDP (같은 포트 매핑)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - airclass-network
+    depends_on:
+      main:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=sub"
 
 
   # ============================================
@@ -108,7 +188,9 @@ services:
     networks:
       - airclass-network
     environment:
-      - VITE_BACKEND_URL=http://localhost:8000
+      # 내부 네트워크에서 접속시: VITE_BACKEND_URL=http://서버IP:8000 설정
+      # 예: VITE_BACKEND_URL=http://10.100.0.146:8000
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8000}
     restart: unless-stopped
     labels:
       - "airclass.role=frontend"

@@ -442,22 +442,20 @@
           <div class="bg-white rounded-lg shadow p-4">
             <h2 class="text-lg font-semibold mb-4 text-gray-800">👨‍🏫 선생님 화면 (WebRTC 초저지연)</h2>
             <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative">
-              <!-- Video element with ultra-low latency settings -->
+              <!-- Video element with ultra-low latency settings - ALWAYS visible -->
               <!-- svelte-ignore a11y-media-has-caption -->
               <video
                 bind:this={videoElement}
                 class="w-full h-full object-contain"
-                class:hidden={!isVideoLoaded}
                 autoplay
-                muted
                 playsinline
                 disablepictureinpicture
                 style="object-fit: contain;"
               ></video>
               
-              <!-- Loading overlay -->
+              <!-- Loading overlay - shows on top when video not loaded -->
               {#if !isVideoLoaded}
-                <div class="absolute inset-0 flex items-center justify-center text-center text-gray-400">
+                <div class="absolute inset-0 flex items-center justify-center text-center text-gray-400 bg-gray-900 bg-opacity-90">
                   <div>
                     <div class="text-4xl mb-2">⏳</div>
                     <p>선생님 화면을 기다리는 중...</p>

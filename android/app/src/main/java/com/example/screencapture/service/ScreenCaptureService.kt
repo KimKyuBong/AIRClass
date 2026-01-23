@@ -182,31 +182,23 @@ class ScreenCaptureService : Service(), ConnectChecker {
         
         Log.w(TAG, "🔄 Force reconnecting (attempt #${retryCount + 1})...")
         
-        try {
-            if (rtmpDisplay.isStreaming) {
-                rtmpDisplay.stopStream()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping stream: ${e.message}")
-        }
-        
-        // Wait a bit before reconnecting
         retryCount++
         val delay = 2000L // 2초 대기 (서버 재시작 대기)
         
         updateNotification("서버 재연결 중... (${retryCount}회)")
         sendStatusBroadcast(STATUS_CONNECTING, "서버 재연결 중... (${retryCount}회)")
         
-        reconnectHandler.postDelayed({
-            if (isStreaming && !isIntentionalStop) {
-                Log.d(TAG, "🔄 Attempting to reconnect to $rtmpUrl")
-                try {
-                    rtmpDisplay.startStream(rtmpUrl)
-                } catch (e: Exception) {
-                    Log.e(TAG, "❌ Reconnection failed: ${e.message}")
-                }
-            }
-        }, delay)
+        // Use library's built-in reTry method which keeps MediaProjection alive
+        // This calls disconnect(clear=false) internally, preserving the MediaProjection token
+        try {
+            Log.d(TAG, "🔄 Using library's reTry() to reconnect to $rtmpUrl")
+            val reason = "Server stream inactive"
+            rtmpDisplay.getStreamClient().reTry(delay, reason, rtmpUrl)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Reconnection failed: ${e.message}", e)
+            // Fallback: stop heartbeat and wait for manual restart
+            stopHeartbeat()
+        }
     }
 
     override fun onCreate() {
@@ -220,6 +212,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
         
         // RtmpDisplay 초기화
         rtmpDisplay = RtmpDisplay(baseContext, true, this)
+        
+        // Enable retry mechanism - CRITICAL for reconnection!
+        rtmpDisplay.getStreamClient().setReTries(999) // Allow unlimited retries
         
         Log.d(TAG, "Service created")
     }
@@ -374,10 +369,17 @@ class ScreenCaptureService : Service(), ConnectChecker {
         Log.d(TAG, "Screen: ${screenWidth}x${screenHeight}, DPI: $screenDensity")
     }
 
-    private fun startStream(resultCode: Int, data: Intent) {
+    private fun startStream(resultCode: Int, data: Intent, isReconnection: Boolean = false) {
         if (isStreaming) {
             Log.w(TAG, "Already streaming")
             return
+        }
+        
+        // MediaProjection 정보 저장 (재연결 시 사용) - 첫 시작 시에만
+        if (!isReconnection) {
+            savedResultCode = resultCode
+            savedData = data
+            Log.d(TAG, "💾 Saved intent data for reconnection (resultCode: $resultCode)")
         }
         
         try {
@@ -474,7 +476,13 @@ class ScreenCaptureService : Service(), ConnectChecker {
             }
             
             // MediaProjection 설정
+            // 재연결 시에도 MediaProjection을 다시 설정해야 함 (rtmpDisplay가 내부적으로 해제할 수 있음)
             rtmpDisplay.setIntentResult(resultCode, data)
+            if (isReconnection) {
+                Log.d(TAG, "🔄 Reinitializing MediaProjection for reconnection")
+            } else {
+                Log.d(TAG, "🔑 MediaProjection initialized")
+            }
             
             // RTMP 스트리밍 시작
             Log.i(TAG, "📡 Starting stream to: $rtmpUrl")
@@ -718,16 +726,16 @@ class ScreenCaptureService : Service(), ConnectChecker {
         updateNotification("서버 재연결 대기 중... (${delay/1000}초)")
         sendStatusBroadcast(STATUS_CONNECTING, "서버 재시작 감지. ${delay/1000}초 후 재연결...")
         
-        reconnectHandler.postDelayed({
-            if (isStreaming && !isIntentionalStop) {
-                Log.d(TAG, "🔄 Attempting reconnection after disconnect...")
-                try {
-                    rtmpDisplay.startStream(rtmpUrl)
-                } catch (e: Exception) {
-                    Log.e(TAG, "❌ Reconnection attempt failed: ${e.message}")
-                }
-            }
-        }, delay)
+        // Use library's built-in reTry method which keeps MediaProjection alive
+        try {
+            Log.d(TAG, "🔄 Using library's reTry() to reconnect to $rtmpUrl after disconnect")
+            val reason = "Unexpected disconnect"
+            rtmpDisplay.getStreamClient().reTry(delay, reason, rtmpUrl)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Reconnection attempt failed: ${e.message}", e)
+            // Fallback: stop heartbeat and wait for manual restart
+            stopHeartbeat()
+        }
     }
 
     override fun onAuthError() {

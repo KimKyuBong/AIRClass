@@ -7,7 +7,7 @@
 # Global settings -> General
 
 # Verbosity of the program; available values are "error", "warn", "info", "debug".
-logLevel: info
+logLevel: debug
 # Destinations of log messages; available values are "stdout", "file" and "syslog".
 logDestinations: [stdout]
 # If "file" is in logDestinations, this is the file which will receive the logs.
@@ -260,10 +260,11 @@ rtmpServerKey: server.key
 rtmpServerCert: server.crt
 
 ###############################################
-# Global settings -> HLS server
+# Global settings -> HLS server (DISABLED)
+# HLS is disabled - using WebRTC-only architecture for all users
 
-# Enable reading streams with the HLS protocol.
-hls: yes
+# HLS protocol disabled
+hls: no
 # Address of the HLS listener.
 hlsAddress: :8888
 # Enable TLS/HTTPS on the HLS server.
@@ -345,18 +346,18 @@ webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: ':8189'
 # WebRTC clients need to know the IP of the server.
 # Gather IPs from interfaces and send them to clients.
-webrtcIPsFromInterfaces: yes
+webrtcIPsFromInterfaces: no
 # List of interfaces whose IPs will be sent to clients.
 # An empty value means to use all available interfaces.
 webrtcIPsFromInterfacesList: []
 # List of additional hosts or IPs to send to clients.
-# Add localhost for development (client on same machine as Docker)
-webrtcAdditionalHosts: ['127.0.0.1']
+# Use SERVER_IP environment variable for external access
+webrtcAdditionalHosts: []
 # ICE servers. Needed only when local listeners can't be reached by clients.
 # STUN servers allows to obtain and share the public IP of the server.
 # TURN/TURNS servers forces all traffic through them.
-webrtcICEServers2: []
-  # - url: stun:stun.l.google.com:19302
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
   # if user is "AUTH_SECRET", then authentication is secret based.
   # the secret must be inserted into the password field.
   # username: ''
@@ -678,9 +679,16 @@ pathDefaults:
 # for example "~^(test1|test2)$" will match both "test1" and "test2",
 # for example "~^prefix" will match all paths that start with "prefix".
 paths:
-  # example:
-  # my_camera:
-  #   source: rtsp://my_camera
+  # Pull the live/stream from Main node via RTSP
+  # This makes Sub nodes relay the stream from Main
+  live/stream:
+    # Pull stream from Main node's RTSP server
+    # Main node is accessible via Docker network name "main"
+    source: rtsp://main:8554/live/stream
+    # Always pull stream (not on-demand) so it's immediately available
+    sourceOnDemand: no
+    # Allow readers to connect
+    overridePublisher: yes
 
   # Settings under path "all_others" are applied to all paths that
   # do not match another entry.
