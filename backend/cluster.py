@@ -9,6 +9,7 @@ Slave: 실제 스트리밍 처리 및 Master에 상태 보고
 import asyncio
 import httpx
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
@@ -29,6 +30,7 @@ class NodeInfo:
     port: int
     rtmp_port: int
     hls_port: int
+    webrtc_port: int
     max_connections: int
     current_connections: int
     cpu_usage: float
@@ -54,6 +56,10 @@ class NodeInfo:
     @property
     def hls_url(self) -> str:
         return f"http://{self.host}:{self.hls_port}/live/stream/index.m3u8"
+
+    @property
+    def webrtc_url(self) -> str:
+        return f"http://{self.host}:{self.webrtc_port}/live/stream/whep"
 
     @property
     def api_url(self) -> str:
@@ -206,8 +212,12 @@ class SlaveClient:
     async def register(self) -> bool:
         """Master에 등록"""
         try:
+            # datetime을 ISO string으로 변환
+            node_dict = asdict(self.node_info)
+            node_dict["last_heartbeat"] = node_dict["last_heartbeat"].isoformat()
+
             response = await self.client.post(
-                f"{self.master_url}/cluster/register", json=asdict(self.node_info)
+                f"{self.master_url}/cluster/register", json=node_dict
             )
             return response.status_code == 200
         except Exception as e:
@@ -282,14 +292,16 @@ async def init_cluster_mode():
 
         logger.info(f"🔗 Starting in SLAVE mode, connecting to {master_url}")
 
-        # 노드 정보 생성
+        # 노드 정보 생성 (Docker 컨테이너 이름을 node_id로 사용)
+        container_name = os.getenv("HOSTNAME", str(uuid.uuid4())[:8])
         node_info = NodeInfo(
-            node_id=os.getenv("NODE_ID", f"slave-{os.getpid()}"),
-            node_name=os.getenv("NODE_NAME", "slave"),
+            node_id=os.getenv("NODE_ID", f"slave-{container_name}"),
+            node_name=os.getenv("NODE_NAME", f"slave-{container_name}"),
             host=os.getenv("NODE_HOST", "localhost"),
             port=int(os.getenv("NODE_PORT", "8000")),
             rtmp_port=int(os.getenv("RTMP_PORT", "1935")),
             hls_port=int(os.getenv("HLS_PORT", "8888")),
+            webrtc_port=int(os.getenv("WEBRTC_PORT", "8889")),
             max_connections=int(os.getenv("MAX_CONNECTIONS", "150")),
             current_connections=0,
             cpu_usage=0.0,

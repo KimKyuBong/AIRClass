@@ -1,0 +1,58 @@
+# AIRClass Master MediaMTX Configuration
+# RTMP 스트림을 받아서 최적의 Slave로 프록시
+
+logLevel: info
+logDestinations: [stdout]
+
+# Connection stability settings
+readTimeout: 30s  # Longer timeout to handle network issues
+writeTimeout: 30s
+readBufferCount: 512  # Reduced from 4096 for lower latency
+udpMaxPayloadSize: 1472  # Optimize for network MTU
+
+# RTMP 서버 활성화 (Android 앱으로부터 스트림 수신)
+rtmp: yes
+rtmpAddress: :1935
+rtmpReadTimeout: 30s
+rtmpWriteTimeout: 30s
+
+# HLS 서버 비활성화 (Master는 프록시만 수행)
+hls: no
+
+# 인증
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8000/api/auth/mediamtx
+
+# 기타 프로토콜 설정
+rtsp: yes
+rtspAddress: :8554
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcAllowOrigin: '*'
+webrtcAdditionalHosts: ['127.0.0.1']
+# Ultra-low latency WebRTC settings
+webrtcICEHostNAT1To1IPs: []
+webrtcICEUDPMuxAddress: :8189
+webrtcICETCPMuxAddress: :8189
+srt: no
+api: no
+metrics: no
+pprof: no
+playback: no
+
+# Path 설정
+pathDefaults:
+  # Publisher는 허용
+  source: publisher
+  # 한 명만 publish 가능
+  overridePublisher: yes
+  
+  # ⭐ 임시 비활성화: runOnReady가 연결을 끊는 문제 해결 중
+  # runOnReady: /app/rtmp-proxy.sh
+  # runOnReadyRestart: yes
+
+paths:
+  all_others:

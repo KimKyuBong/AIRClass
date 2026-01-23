@@ -104,6 +104,73 @@ class ScreenCaptureService : Service(), ConnectChecker {
             }
         }
     }
+    
+    // Keep-alive / Heartbeat mechanism
+    private val heartbeatHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            if (isStreaming && !isIntentionalStop) {
+                // 서버 health check를 통해 실제 서버가 살아있는지 확인
+                checkServerHealth()
+                
+                // 3초마다 체크
+                heartbeatHandler.postDelayed(this, 3000)
+            }
+        }
+    }
+    
+    private fun checkServerHealth() {
+        // 백그라운드 스레드에서 서버 상태 체크
+        Thread {
+            try {
+                // RTMP 서버의 HTTP 포트로 요청 (Master는 8000 포트에서 HTTP 서버 운영)
+                val url = java.net.URL("http://10.0.2.2:8000/")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 2000 // 2초 타임아웃
+                connection.readTimeout = 2000
+                connection.requestMethod = "GET"
+                
+                val responseCode = connection.responseCode
+                connection.disconnect()
+                
+                if (responseCode == 200) {
+                    Log.d(TAG, "💚 Heartbeat: Server is alive (HTTP $responseCode)")
+                } else {
+                    Log.w(TAG, "💔 Heartbeat: Server returned $responseCode, reconnecting...")
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        forceReconnect()
+                    }
+                }
+            } catch (e: Exception) {
+                // 서버 연결 실패 = 서버가 죽었거나 재시작 중
+                Log.w(TAG, "💔 Heartbeat: Server unreachable (${e.message}), forcing reconnect...")
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    forceReconnect()
+                }
+            }
+        }.start()
+    }
+    
+    private fun forceReconnect() {
+        if (!isStreaming || isIntentionalStop) {
+            return
+        }
+        
+        Log.w(TAG, "🔄 Force reconnecting...")
+        
+        try {
+            rtmpDisplay.stopStream()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping stream: ${e.message}")
+        }
+        
+        isStreaming = false
+        retryCount++
+        val delay = 1000L
+        updateNotification("서버 재연결 중...")
+        sendStatusBroadcast(STATUS_CONNECTING, "서버 재연결 중...")
+        reconnectHandler.postDelayed(reconnectRunnable, delay)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -334,8 +401,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
             val rotation = 0
             
             // 키프레임 간격 설정 (초 단위)
-            // 짧은 간격(1초)으로 설정하면 화면 변화가 적을 때도 계속 전송됨
-            val iFrameInterval = 1 // 1초마다 키프레임 생성
+            // Ultra-low latency: 키프레임을 매우 자주 생성하여 지연 최소화
+            // 0.5초 = 500ms마다 키프레임 → 최대 지연 500ms
+            val iFrameInterval = 1 // Keyframe every second (MediaCodec uses this as max interval)
             
             Log.i(TAG, "📊 Streaming Settings:")
             Log.i(TAG, "   Resolution: ${width}x${height}")
@@ -383,6 +451,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
             // Start performance monitoring
             startPerformanceMonitoring()
             
+            // Start heartbeat monitoring
+            startHeartbeat()
+            
             // Show Floating Control
             showFloatingControl()
             
@@ -401,6 +472,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
         
         isIntentionalStop = true // Mark as intentional stop
         reconnectHandler.removeCallbacks(reconnectRunnable) // Cancel any pending reconnects
+        stopHeartbeat() // Stop heartbeat monitoring
         
         try {
             // Stop performance monitoring
@@ -493,6 +565,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
 
     override fun onDestroy() {
         stopStream()
+        stopHeartbeat() // Ensure heartbeat is stopped
         removeFloatingControl() // Ensure floating control is removed
         super.onDestroy()
         Log.d(TAG, "Service destroyed")
@@ -525,6 +598,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
         
         updateNotification("연결 성공 - 스트리밍 중")
         sendStatusBroadcast(STATUS_CONNECTED, "연결 성공! 스트리밍 중")
+        
+        // Restart heartbeat after successful connection
+        startHeartbeat()
     }
 
     override fun onConnectionFailed(reason: String) {
@@ -535,7 +611,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
             return
         }
 
-        // Smart Reconnect Logic
+        // Aggressive Reconnect Logic - 계속 재시도
         retryCount++
         val delay = calculateRetryDelay(retryCount)
         
@@ -547,10 +623,24 @@ class ScreenCaptureService : Service(), ConnectChecker {
     }
     
     private fun calculateRetryDelay(attempt: Int): Long {
-        // Exponential backoff: 3s, 6s, 12s, 24s, 30s(max)...
-        var delay = 3000L * (1L shl (attempt - 1))
-        if (delay > maxRetryDelay) delay = maxRetryDelay
-        return delay
+        // Faster reconnection: 2s, 3s, 5s, 5s(max)... - 빠르게 재시도
+        return when {
+            attempt == 1 -> 2000L  // 첫 시도: 2초
+            attempt == 2 -> 3000L  // 두 번째: 3초
+            else -> 5000L          // 이후: 5초마다 계속
+        }
+    }
+    
+    // Heartbeat (Keep-alive) methods
+    private fun startHeartbeat() {
+        stopHeartbeat() // Stop any existing heartbeat
+        Log.i(TAG, "💚 Starting heartbeat monitoring (3s interval)")
+        heartbeatHandler.postDelayed(heartbeatRunnable, 3000) // First check after 3 seconds
+    }
+    
+    private fun stopHeartbeat() {
+        heartbeatHandler.removeCallbacks(heartbeatRunnable)
+        Log.i(TAG, "💔 Heartbeat monitoring stopped")
     }
 
     override fun onNewBitrate(bitrate: Long) {
@@ -578,9 +668,13 @@ class ScreenCaptureService : Service(), ConnectChecker {
             updateNotification("연결 끊김")
             sendStatusBroadcast(STATUS_DISCONNECTED, "서버와 연결이 끊어졌습니다")
         } else {
-            // Unexpected disconnect - treat as failure and retry
-            Log.w(TAG, "⚠️ Unexpected disconnect! Attempting to reconnect...")
-            onConnectionFailed("Connection lost unexpectedly")
+            // Unexpected disconnect - retry immediately with minimal delay
+            Log.w(TAG, "⚠️ Unexpected disconnect! Reconnecting immediately...")
+            retryCount++
+            val delay = 500L // 0.5초만 대기 후 즉시 재연결
+            updateNotification("재연결 중...")
+            sendStatusBroadcast(STATUS_CONNECTING, "재연결 중...")
+            reconnectHandler.postDelayed(reconnectRunnable, delay)
         }
     }
 

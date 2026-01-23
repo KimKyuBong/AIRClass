@@ -30,15 +30,15 @@
   // Calculate cluster-wide stats
   $: totalCapacity = clusterData?.nodes?.reduce((sum, node) => sum + node.max_connections, 0) || 0;
   $: totalConnections = clusterData?.nodes?.reduce((sum, node) => sum + node.current_connections, 0) || 0;
-  $: activeNodes = clusterData?.nodes?.filter(n => n.status === 'active').length || 0;
+  $: activeNodes = clusterData?.nodes?.filter(n => n.status === 'healthy').length || 0;
   $: averageLoad = clusterData?.nodes?.length > 0 
-    ? clusterData.nodes.reduce((sum, node) => sum + node.load_percentage, 0) / clusterData.nodes.length 
+    ? clusterData.nodes.reduce((sum, node) => sum + ((node.current_connections / node.max_connections) * 100 || 0), 0) / clusterData.nodes.length 
     : 0;
   
   // Get status color
   function getStatusColor(status) {
     switch(status) {
-      case 'active': return 'text-green-600';
+      case 'healthy': return 'text-green-600';
       case 'offline': return 'text-red-600';
       case 'unhealthy': return 'text-yellow-600';
       default: return 'text-gray-600';
@@ -202,28 +202,28 @@
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap">
                     <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                      {node.status === 'active' ? 'bg-green-100 text-green-800' : 
+                      {node.status === 'healthy' ? 'bg-green-100 text-green-800' : 
                        node.status === 'offline' ? 'bg-red-100 text-red-800' : 
                        'bg-yellow-100 text-yellow-800'}">
                       {node.status}
                     </span>
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm text-gray-900">{node.load_percentage.toFixed(1)}%</div>
+                    <div class="text-sm text-gray-900">{((node.current_connections / node.max_connections) * 100 || 0).toFixed(1)}%</div>
                     <div class="w-24 bg-gray-200 rounded-full h-2 mt-1">
-                      <div class="{getLoadColor(node.load_percentage)} h-2 rounded-full" 
-                           style="width: {node.load_percentage}%"></div>
+                      <div class="{getLoadColor((node.current_connections / node.max_connections) * 100 || 0)} h-2 rounded-full" 
+                           style="width: {(node.current_connections / node.max_connections) * 100 || 0}%"></div>
                     </div>
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {node.current_connections} / {node.max_connections}
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm text-blue-600">{node.node_url}</div>
+                    <div class="text-sm text-blue-600">{node.host}:{node.port}</div>
                     <div class="text-xs text-gray-500">RTMP: {node.rtmp_port} | HLS: {node.hls_port}</div>
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDate(node.last_seen)}
+                    {formatDate(node.last_heartbeat)}
                   </td>
                 </tr>
               {/each}

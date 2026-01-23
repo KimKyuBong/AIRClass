@@ -5,6 +5,8 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
+    ffmpeg \
+    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # 작업 디렉토리 생성
@@ -25,7 +27,12 @@ RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64v8" || echo "amd64") && \
 # 애플리케이션 코드 복사
 COPY main.py .
 COPY mediamtx.yml .
+COPY mediamtx-master.yml .
+COPY rtmp-proxy.sh .
 COPY cluster.py .
+
+# 스크립트 실행 권한 부여
+RUN chmod +x rtmp-proxy.sh
 
 # 포트 노출
 EXPOSE 8000 1935 8888

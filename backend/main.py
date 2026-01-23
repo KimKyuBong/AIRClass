@@ -13,6 +13,7 @@ import json
 import jwt
 import secrets
 import os
+import logging
 from datetime import datetime, timedelta
 from cluster import cluster_manager, init_cluster_mode, shutdown_cluster
 from prometheus_client import (
@@ -22,6 +23,10 @@ from prometheus_client import (
     generate_latest,
     CONTENT_TYPE_LATEST,
 )
+
+# Logger setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AIRClass Backend Server",
@@ -219,8 +224,8 @@ def stop_mediamtx():
 
 mediamtx_process = None
 
-# JWT Secret Key (프로덕션에서는 환경 변수로 관리)
-JWT_SECRET_KEY = secrets.token_urlsafe(32)
+# JWT Secret Key (환경 변수에서 읽기, 없으면 생성하여 환경에 저장)
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_MINUTES = 60  # 토큰 유효 시간
 
@@ -274,14 +279,18 @@ def generate_stream_token(user_type: str, user_id: str) -> str:
 def verify_token(token: str) -> Optional[dict]:
     """토큰 검증"""
     try:
-        if token not in active_tokens:
-            return None
+        # JWT 검증만 수행 (active_tokens는 Master에서만 관리하므로 Slave에서는 체크하지 않음)
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        print(f"[verify_token] ✅ Token valid. Payload: {payload}")
         return payload
-    except jwt.ExpiredSignatureError:
-        active_tokens.discard(token)
+    except jwt.ExpiredSignatureError as e:
+        print(f"[verify_token] ❌ Token expired: {e}")
+        # Master에서만 active_tokens 정리
+        if token in active_tokens:
+            active_tokens.discard(token)
         return None
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        print(f"[verify_token] ❌ Invalid token: {e}")
         return None
 
 
@@ -300,33 +309,88 @@ async def root():
     }
 
 
-@app.post("/api/token")
-async def create_token(user_type: str, user_id: str):
+async def get_external_hls_port(node_id: str) -> Optional[int]:
     """
-    스트림 접근 토큰 발급
+    Docker 컨테이너의 외부에 매핑된 HLS 포트를 찾습니다.
 
     Args:
-        user_type: 사용자 타입 (teacher/student/monitor)
-        user_id: 사용자 ID
+        node_id: 노드 ID (예: "slave-e3300a10f9b7")
 
     Returns:
-        JWT 토큰과 HLS URL
+        외부 포트 번호 또는 None
     """
-    if user_type not in ["teacher", "student", "monitor"]:
-        raise HTTPException(status_code=400, detail="Invalid user_type")
+    try:
+        # node_id에서 컨테이너 호스트명 추출 (slave-HOSTNAME 형식)
+        # Docker Compose는 airclass-slave-1, airclass-slave-2 등의 이름 사용
+        # node_id는 "slave-<hostname>" 형식이므로, 실제 컨테이너는 airclass-slave-* 패턴
 
-    if not user_id or len(user_id) < 1:
-        raise HTTPException(status_code=400, detail="user_id required")
+        # 모든 slave 컨테이너의 포트 매핑 확인
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--filter",
+                "name=airclass-slave",
+                "--format",
+                "{{.Names}}\t{{.Ports}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
 
-    token = generate_stream_token(user_type, user_id)
+        if result.returncode != 0:
+            logger.error(f"Failed to get docker containers: {result.stderr}")
+            return None
 
-    return {
-        "token": token,
-        "hls_url": f"http://localhost:8888/live/stream/index.m3u8?jwt={token}",
-        "expires_in": JWT_EXPIRATION_MINUTES * 60,  # seconds
-        "user_type": user_type,
-        "user_id": user_id,
-    }
+        # 각 컨테이너의 포트 매핑 파싱
+        # 출력 예: "airclass-slave-1\t0.0.0.0:60064->8888/tcp, ..."
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+
+            container_name = parts[0]
+            ports_str = parts[1]
+
+            # node_id의 hostname 부분과 컨테이너 호스트명 매칭 확인
+            # docker exec로 컨테이너의 HOSTNAME 환경변수 확인
+            hostname_check = subprocess.run(
+                ["docker", "exec", container_name, "hostname"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+
+            if hostname_check.returncode == 0:
+                container_hostname = hostname_check.stdout.strip()
+                expected_node_id = f"slave-{container_hostname}"
+
+                if expected_node_id == node_id:
+                    # 이 컨테이너가 맞음! 8888 포트의 외부 매핑 찾기
+                    # 포트 형식: "0.0.0.0:60064->8888/tcp"
+                    import re
+
+                    match = re.search(r"0\.0\.0\.0:(\d+)->8888/tcp", ports_str)
+                    if match:
+                        external_port = int(match.group(1))
+                        logger.info(
+                            f"Found external HLS port for {node_id}: {external_port}"
+                        )
+                        return external_port
+
+        logger.warning(f"Could not find external port mapping for node {node_id}")
+        return None
+
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout while querying Docker containers")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting external HLS port: {e}")
+        return None
 
 
 @app.post("/api/auth/mediamtx")
@@ -340,15 +404,33 @@ async def mediamtx_auth(request: dict):
     path = request.get("path")
     query = request.get("query", "")
     protocol = request.get("protocol")
+    ip = request.get("ip", "")
 
     # 디버깅용 로그
     print(
-        f"[MediaMTX Auth] action={action}, protocol={protocol}, path={path}, query={query}"
+        f"[MediaMTX Auth] action={action}, protocol={protocol}, path={path}, query={query}, ip={ip}"
     )
+    print(f"[MediaMTX Auth] Full request: {request}")
 
     # Android 앱의 RTMP publish는 항상 허용
     if action == "publish" and protocol == "rtmp":
         print(f"[MediaMTX Auth] ✅ Allowing RTMP publish")
+        return {"status": "ok"}
+
+    # Master 모드: 내부 프록시 스크립트의 RTMP read 허용 (localhost에서만)
+    if action == "read" and protocol == "rtmp":
+        ip = request.get("ip", "")
+        if ip in ["127.0.0.1", "::1", "localhost"]:
+            print(f"[MediaMTX Auth] ✅ Allowing internal RTMP read from {ip}")
+            return {"status": "ok"}
+        else:
+            print(f"[MediaMTX Auth] ❌ RTMP read denied - not from localhost (ip={ip})")
+            raise HTTPException(status_code=403, detail="RTMP read not allowed")
+
+    # Master 모드: 내부 FFmpeg의 RTSP read 허용 (모든 localhost 연결)
+    # FFmpeg 프록시는 항상 localhost에서만 실행되므로 RTSP read는 모두 허용
+    if action == "read" and protocol == "rtsp":
+        print(f"[MediaMTX Auth] ✅ Allowing internal RTSP read (FFmpeg proxy)")
         return {"status": "ok"}
 
     # HLS read는 JWT 토큰 필요
@@ -356,7 +438,9 @@ async def mediamtx_auth(request: dict):
         # query에서 jwt 파라미터 추출
         token = None
         if "jwt=" in query:
+            # 첫 번째 jwt= 값만 추출 (중복 방지)
             token = query.split("jwt=")[1].split("&")[0]
+            print(f"[MediaMTX Auth] Extracted JWT token: {token[:50]}...")
 
         if not token:
             print(f"[MediaMTX Auth] ❌ HLS read denied - no token")
@@ -370,10 +454,41 @@ async def mediamtx_auth(request: dict):
 
         # path 검증
         if payload.get("path") != path:
-            print(f"[MediaMTX Auth] ❌ HLS read denied - path mismatch")
+            print(
+                f"[MediaMTX Auth] ❌ HLS read denied - path mismatch (expected: {payload.get('path')}, got: {path})"
+            )
             raise HTTPException(status_code=403, detail="Path mismatch")
 
         print(f"[MediaMTX Auth] ✅ Allowing HLS read for {payload.get('user_id')}")
+        return {"status": "ok"}
+
+    # WebRTC read는 JWT 토큰 필요
+    if action == "read" and protocol == "webrtc":
+        # query에서 jwt 파라미터 추출
+        token = None
+        if "jwt=" in query:
+            # 첫 번째 jwt= 값만 추출 (중복 방지)
+            token = query.split("jwt=")[1].split("&")[0]
+            print(f"[MediaMTX Auth] Extracted JWT token: {token[:50]}...")
+
+        if not token:
+            print(f"[MediaMTX Auth] ❌ WebRTC read denied - no token")
+            raise HTTPException(status_code=401, detail="Token required")
+
+        # 토큰 검증
+        payload = verify_token(token)
+        if not payload:
+            print(f"[MediaMTX Auth] ❌ WebRTC read denied - invalid token")
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+        # path 검증
+        if payload.get("path") != path:
+            print(
+                f"[MediaMTX Auth] ❌ WebRTC read denied - path mismatch (expected: {payload.get('path')}, got: {path})"
+            )
+            raise HTTPException(status_code=403, detail="Path mismatch")
+
+        print(f"[MediaMTX Auth] ✅ Allowing WebRTC read for {payload.get('user_id')}")
         return {"status": "ok"}
 
     # 그 외는 거부
@@ -499,6 +614,11 @@ async def register_node(request: Request):
 
     data = await request.json()
     from cluster import NodeInfo
+    from datetime import datetime
+
+    # last_heartbeat을 ISO string에서 datetime으로 변환
+    if "last_heartbeat" in data and isinstance(data["last_heartbeat"], str):
+        data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
 
     node = NodeInfo(**data)
     cluster_manager.register_node(node)
@@ -588,8 +708,11 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
     """
     mode = os.getenv("MODE", "standalone")
 
+    # DEVELOPMENT: Master에서 직접 WebRTC 제공 (NAT 문제 회피)
+    use_master_webrtc = os.getenv("USE_MASTER_WEBRTC", "true").lower() == "true"
+
     # Master 모드: 최적의 Slave 선택하여 리다이렉트
-    if mode == "master":
+    if mode == "master" and not use_master_webrtc:
         node = cluster_manager.get_least_loaded_node()
         if not node:
             raise HTTPException(status_code=503, detail="No healthy nodes available")
@@ -601,12 +724,91 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
 
         # 직접 Slave에 요청하여 토큰 받기
         import httpx
+        import re
 
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(redirect_url)
                 if response.status_code == 200:
                     data = response.json()
+
+                    # Docker 외부 접근을 위해 호스트에 매핑된 포트 찾기 (HLS & WebRTC)
+                    try:
+                        # Get Docker container port mappings
+                        result = subprocess.run(
+                            [
+                                "docker",
+                                "ps",
+                                "--filter",
+                                "name=airclass-slave",
+                                "--format",
+                                "{{.Names}}\t{{.Ports}}",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
+                        )
+
+                        if result.returncode == 0:
+                            # Find the specific container for this node
+                            for line in result.stdout.strip().split("\n"):
+                                if not line:
+                                    continue
+
+                                parts = line.split("\t")
+                                if len(parts) < 2:
+                                    continue
+
+                                container_name = parts[0]
+                                ports_str = parts[1]
+
+                                # Check if this container matches our node_id
+                                hostname_check = subprocess.run(
+                                    ["docker", "exec", container_name, "hostname"],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=2,
+                                )
+
+                                if hostname_check.returncode == 0:
+                                    container_hostname = hostname_check.stdout.strip()
+                                    expected_node_id = f"slave-{container_hostname}"
+
+                                    if expected_node_id == node.node_id:
+                                        # Extract external ports for HLS (8888) and WebRTC (8889)
+                                        hls_match = re.search(
+                                            r"0\.0\.0\.0:(\d+)->8888/tcp", ports_str
+                                        )
+                                        webrtc_match = re.search(
+                                            r"0\.0\.0\.0:(\d+)->8889/tcp", ports_str
+                                        )
+
+                                        if hls_match:
+                                            external_hls_port = hls_match.group(1)
+                                            # Rewrite HLS URL to use localhost with external port
+                                            token = data.get("token", "")
+                                            data["hls_url"] = (
+                                                f"http://localhost:{external_hls_port}/live/stream/index.m3u8?jwt={token}"
+                                            )
+                                            logger.info(
+                                                f"Rewrote HLS URL to use external port {external_hls_port}"
+                                            )
+
+                                        if webrtc_match:
+                                            external_webrtc_port = webrtc_match.group(1)
+                                            # Rewrite WebRTC URL to use localhost with external port
+                                            token = data.get("token", "")
+                                            data["webrtc_url"] = (
+                                                f"http://localhost:{external_webrtc_port}/live/stream/whep?jwt={token}"
+                                            )
+                                            logger.info(
+                                                f"Rewrote WebRTC URL to use external port {external_webrtc_port}"
+                                            )
+
+                                        break
+                    except Exception as e:
+                        logger.error(f"Error finding external ports: {e}")
+
                     # Master 정보 추가
                     data["routed_by"] = "master"
                     data["node_id"] = node.node_id
@@ -636,11 +838,19 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
     # HLS URL 생성 (Slave는 자신의 주소 반환)
     node_host = os.getenv("NODE_HOST", "localhost")
     hls_port = os.getenv("HLS_PORT", "8888")
+    webrtc_port = os.getenv("WEBRTC_PORT", "8889")
+
+    # Master 모드에서는 localhost 사용 (Docker 외부 접근)
+    if mode == "master":
+        node_host = "localhost"
+
     hls_url = f"http://{node_host}:{hls_port}/live/stream/index.m3u8?jwt={token}"
+    webrtc_url = f"http://{node_host}:{webrtc_port}/live/stream/whep?jwt={token}"
 
     return {
         "token": token,
         "hls_url": hls_url,
+        "webrtc_url": webrtc_url,
         "expires_in": JWT_EXPIRATION_MINUTES * 60,
         "user_type": user_type,
         "user_id": user_id,

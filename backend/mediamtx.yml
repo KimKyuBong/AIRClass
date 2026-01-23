@@ -17,13 +17,16 @@ logFile: mediamtx.log
 # Reduced for lower latency when receiving RTMP streams
 readTimeout: 3s
 # Timeout of write operations.
-writeTimeout: 3s
+writeTimeout: 10s
 # Size of the queue of outgoing packets.
-# Reduced for lower latency - lower value reduces buffering delay
-writeQueueSize: 64
+# Increased to prevent "write queue is full" errors with HLS
+writeQueueSize: 512
 # Maximum size of outgoing UDP packets.
 # This can be decreased to avoid fragmentation on networks with a low UDP MTU.
 udpMaxPayloadSize: 1472
+# Maximum size of RTMP/RTSP packets (in bytes)
+# Increased to handle high-bitrate Android streams
+readBufferCount: 4096
 
 # Command to run when a client connects to the server.
 # This is terminated with SIGINT when a client disconnects from the server.
@@ -290,17 +293,18 @@ hlsAlwaysRemux: yes
 # * lowLatency - uses Low-Latency HLS.
 hlsVariant: lowLatency
 hlsSegmentCount: 7
-hlsSegmentDuration: 1s
+hlsSegmentDuration: 500ms
 # Minimum duration of each part.
 # A player usually puts 3 parts in a buffer before reproducing the stream.
 # Parts are used in Low-Latency HLS in place of segments.
 # Part duration is influenced by the distance between video/audio samples
 # and is adjusted in order to produce segments with a similar duration.
-# Reduced from 200ms to 100ms for lower latency (3 parts = 300ms instead of 600ms)
-hlsPartDuration: 100ms
+# Reduced to 50ms for ultra-low latency (3 parts = 150ms buffer)
+hlsPartDuration: 50ms
 # Maximum size of each segment.
 # This prevents RAM exhaustion.
-hlsSegmentMaxSize: 50M
+# Increased to 100M to handle high-quality video from Android
+hlsSegmentMaxSize: 100M
 # Directory in which to save segments, instead of keeping them in the RAM.
 # This decreases performance, since reading from disk is less performant than
 # reading from RAM, but allows to save RAM.
@@ -317,6 +321,7 @@ webrtc: yes
 # Address of the WebRTC HTTP listener.
 webrtcAddress: :8889
 # Enable TLS/HTTPS on the WebRTC server.
+# Set to no for development (localhost)
 webrtcEncryption: no
 # Path to the server key.
 # This can be generated with:
@@ -336,9 +341,8 @@ webrtcTrustedProxies: []
 # Use a blank string to disable.
 webrtcLocalUDPAddress: :8189
 # Address of a local TCP listener that will receive connections.
-# This is disabled by default since TCP is less efficient than UDP and
-# introduces a progressive delay when network is congested.
-webrtcLocalTCPAddress: ''
+# Enabling TCP as fallback for development environment
+webrtcLocalTCPAddress: ':8189'
 # WebRTC clients need to know the IP of the server.
 # Gather IPs from interfaces and send them to clients.
 webrtcIPsFromInterfaces: yes
@@ -346,7 +350,8 @@ webrtcIPsFromInterfaces: yes
 # An empty value means to use all available interfaces.
 webrtcIPsFromInterfacesList: []
 # List of additional hosts or IPs to send to clients.
-webrtcAdditionalHosts: []
+# Add localhost for development (client on same machine as Docker)
+webrtcAdditionalHosts: ['127.0.0.1']
 # ICE servers. Needed only when local listeners can't be reached by clients.
 # STUN servers allows to obtain and share the public IP of the server.
 # TURN/TURNS servers forces all traffic through them.
@@ -359,10 +364,10 @@ webrtcICEServers2: []
   # clientOnly: false
 # Time to wait for the WebRTC handshake to complete.
 # Reduced for faster connection establishment
-webrtcHandshakeTimeout: 5s
+webrtcHandshakeTimeout: 3s
 # Maximum time to gather video tracks.
 # Reduced for faster track gathering
-webrtcTrackGatherTimeout: 1s
+webrtcTrackGatherTimeout: 500ms
 
 ###############################################
 # Global settings -> SRT server

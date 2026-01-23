@@ -19,9 +19,18 @@ services:
       MODE: master
       NODE_NAME: master
       NODE_HOST: master
+      USE_MASTER_WEBRTC: "true"  # Development: Master에서 직접 WebRTC 제공
+      HLS_PORT: 8888
+      WEBRTC_PORT: 8889
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
     ports:
       - "8000:8000"  # API 포트
+      - "1935:1935"  # RTMP 포트 (Android 앱용)
+      - "8888:8888"  # HLS 포트
+      - "8889:8889"  # WebRTC HTTP 포트
+      - "8189:8189/udp"  # WebRTC UDP 포트
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker 소켓 마운트 (외부 포트 감지용)
     networks:
       - airclass-network
     healthcheck:
@@ -50,11 +59,14 @@ services:
       NODE_PORT: 8000
       RTMP_PORT: 1935
       HLS_PORT: 8888
+      WEBRTC_PORT: 8889
       MAX_CONNECTIONS: 150
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
     ports:
       - "1935"  # RTMP (랜덤 포트)
       - "8888"  # HLS (랜덤 포트)
+      - "8889"  # WebRTC HTTP (랜덤 포트)
+      - "8189/udp"  # WebRTC UDP (랜덤 포트)
       - "8000"  # API (랜덤 포트)
     networks:
       - airclass-network
@@ -85,7 +97,7 @@ services:
   # Frontend (Optional - 개발용)
   # ============================================
   frontend:
-    image: node:18-alpine
+    image: node:20-alpine
     container_name: airclass-frontend
     working_dir: /app
     volumes:
