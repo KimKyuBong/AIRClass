@@ -107,7 +107,7 @@
       video.play().catch(err => console.warn('[Student] Immediate play failed:', err.message));
     });
     
-    // Monitor video lag and keep at live edge
+    // Monitor video lag and keep at live edge - AGGRESSIVE MODE
     latencyMonitorInterval = setInterval(() => {
       if (video.buffered.length > 0) {
         const currentTime = video.currentTime;
@@ -115,13 +115,19 @@
         const lag = bufferedEnd - currentTime;
         currentLatency = Math.round(lag * 1000); // Convert to ms
         
-        // If lag exceeds 300ms, jump to live edge (ultra-low latency threshold)
-        if (lag > 0.3) {
+        // AGGRESSIVE: If lag exceeds 200ms, jump to live edge
+        if (lag > 0.2) {
           console.warn('[Student] ⚠️ Video lag detected:', lag.toFixed(3), 's - jumping to live edge');
-          video.currentTime = bufferedEnd - 0.05; // Stay 50ms behind live edge
+          video.currentTime = bufferedEnd - 0.02; // Stay 20ms behind live edge
+        }
+        
+        // ULTRA-AGGRESSIVE: If lag exceeds 500ms, something is wrong
+        if (lag > 0.5) {
+          console.error('[Student] 🔴 CRITICAL LAG:', lag.toFixed(3), 's - forcing live edge');
+          video.currentTime = bufferedEnd - 0.01; // Force to 10ms behind
         }
       }
-    }, 100); // Check every 100ms for responsive latency management
+    }, 50); // Check every 50ms (increased from 100ms) for faster response
   }
 
   async function initializeWebRTC(whepUrl, retryCount = 0) {

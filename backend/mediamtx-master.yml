@@ -4,10 +4,11 @@
 logLevel: info
 logDestinations: [stdout]
 
-# Connection stability settings
+# Ultra-low latency settings
 readTimeout: 30s  # Longer timeout to handle network issues
 writeTimeout: 30s
-readBufferCount: 512  # Reduced from 4096 for lower latency
+readBufferCount: 256  # Further reduced from 512 for minimum latency
+writeBufferCount: 256  # Match read buffer
 udpMaxPayloadSize: 1472  # Optimize for network MTU
 
 # RTMP 서버 활성화 (Android 앱으로부터 스트림 수신)

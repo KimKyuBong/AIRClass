@@ -401,9 +401,10 @@ class ScreenCaptureService : Service(), ConnectChecker {
             val rotation = 0
             
             // 키프레임 간격 설정 (초 단위)
-            // Ultra-low latency: 키프레임을 매우 자주 생성하여 지연 최소화
-            // 0.5초 = 500ms마다 키프레임 → 최대 지연 500ms
-            val iFrameInterval = 1 // Keyframe every second (MediaCodec uses this as max interval)
+            // Ultra-low latency: I-frame을 자주 생성하여 최대 지연 최소화
+            // 값이 작을수록 빠른 재생 시작, 하지만 비트레이트 증가
+            // 0.5초 = 500ms마다 I-frame → 최대 초기 지연 500ms
+            val iFrameInterval = 1 // 1초마다 I-frame (권장: 0.5-2초)
             
             Log.i(TAG, "📊 Streaming Settings:")
             Log.i(TAG, "   Resolution: ${width}x${height}")
