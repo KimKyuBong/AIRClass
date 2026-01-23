@@ -14,6 +14,9 @@ import jwt
 import secrets
 import os
 import logging
+import socket
+import qrcode
+import io
 from datetime import datetime, timedelta
 from cluster import cluster_manager, init_cluster_mode, shutdown_cluster
 from prometheus_client import (
@@ -233,11 +236,50 @@ JWT_EXPIRATION_MINUTES = 60  # 토큰 유효 시간
 active_tokens: Set[str] = set()
 
 
+def get_local_ip() -> str:
+    """Get local IP address in the network"""
+    try:
+        # Create a socket to get the local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Connect to Google DNS (doesn't actually send data)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception:
+        return "localhost"
+
+
+def print_qr_code(data: str):
+    """Print QR code to terminal using ASCII art"""
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=1,
+        border=2,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+
+    # Print to terminal
+    print("\n" + "=" * 60)
+    print("📱 QR Code for Android App Connection:")
+    print("=" * 60)
+    qr.print_ascii(invert=True)
+    print("=" * 60)
+    print(f"Server IP: {data}")
+    print("=" * 60 + "\n")
+
+
 @app.on_event("startup")
 async def startup_event():
     """서버 시작 시 MediaMTX 실행 및 클러스터 초기화"""
     start_mediamtx()
     await init_cluster_mode()
+
+    # Print QR code for Android app connection
+    local_ip = get_local_ip()
+    print_qr_code(local_ip)
 
 
 @app.on_event("shutdown")

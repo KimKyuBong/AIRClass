@@ -55,4 +55,7 @@ dependencies {
     
     // RTMP Streaming Library (RootEncoder)
     implementation("com.github.pedroSG94.RootEncoder:library:2.5.2")
+    
+    // QR Code Scanner (ZXing)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

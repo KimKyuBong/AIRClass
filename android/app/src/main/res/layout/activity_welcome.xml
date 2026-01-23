@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="32dp"
+    android:background="#F5F5F5">
+
+    <!-- Logo / Title -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="📱 AIRClass"
+        android:textSize="48sp"
+        android:textStyle="bold"
+        android:textColor="#2196F3"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="선생님용 화면 송출 앱"
+        android:textSize="18sp"
+        android:textColor="#757575"
+        android:layout_marginBottom="64dp"/>
+
+    <!-- DEV Button -->
+    <Button
+        android:id="@+id/btnDev"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="🔧 개발 모드 (수동 IP 입력)"
+        android:textSize="18sp"
+        android:padding="16dp"
+        android:layout_marginBottom="16dp"
+        android:backgroundTint="#FF9800"/>
+
+    <!-- QR Button -->
+    <Button
+        android:id="@+id/btnQR"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="📷 QR 스캔으로 연결"
+        android:textSize="18sp"
+        android:padding="16dp"
+        android:backgroundTint="#4CAF50"/>
+
+    <!-- Info Text -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="백엔드 서버를 실행하면\nQR 코드가 표시됩니다"
+        android:textSize="14sp"
+        android:textColor="#999999"
+        android:gravity="center"
+        android:layout_marginTop="32dp"/>
+
+</LinearLayout>

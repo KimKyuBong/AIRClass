@@ -157,6 +157,14 @@ class MainActivity : AppCompatActivity() {
         initViews()
         setupListeners()
         registerConnectionReceiver()
+        
+        // QR 스캔으로 들어온 경우 자동 시작
+        if (intent.getBooleanExtra("auto_start", false)) {
+            // 약간의 딜레이 후 자동 시작 (UI 준비 대기)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                startButton.performClick()
+            }, 500)
+        }
     }
     
     override fun onResume() {
