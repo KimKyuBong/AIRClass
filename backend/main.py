@@ -907,9 +907,50 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
 
 @app.get("/health")
 async def health_check():
-    """헬스 체크 (Docker healthcheck용)"""
+    """
+    헬스 체크 (Docker healthcheck용)
+
+    Returns:
+        - status: healthy/degraded
+        - mode: master/slave/standalone
+        - stream_active: MediaMTX에서 스트림을 받고 있는지 여부
+        - timestamp: 현재 시간
+    """
     mode = os.getenv("MODE", "standalone")
-    return {"status": "healthy", "mode": mode, "timestamp": datetime.now().isoformat()}
+
+    # MediaMTX API로 스트림 상태 확인 (v2 API 사용)
+    stream_active = False
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            # MediaMTX API v2: GET /v2/paths/list
+            response = await client.get("http://127.0.0.1:9997/v2/paths/list")
+            if response.status_code == 200:
+                data = response.json()
+                # "live/stream" 경로에 활성 publisher가 있는지 확인
+                items = data.get("items", [])
+                for item in items:
+                    if item.get("name") == "live/stream":
+                        # 활성 reader나 publisher가 있는지 확인
+                        readers = item.get("readers", 0)
+                        source_ready = item.get("sourceReady", False)
+
+                        if source_ready or readers > 0:
+                            stream_active = True
+                            logger.debug(
+                                f"Stream active: sourceReady={source_ready}, readers={readers}"
+                            )
+                        break
+    except Exception as e:
+        logger.warning(f"Failed to check MediaMTX stream status: {e}")
+
+    return {
+        "status": "healthy",
+        "mode": mode,
+        "stream_active": stream_active,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 @app.get("/metrics")

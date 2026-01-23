@@ -123,30 +123,54 @@ class ScreenCaptureService : Service(), ConnectChecker {
         // 백그라운드 스레드에서 서버 상태 체크
         Thread {
             try {
+                // 저장된 서버 IP로 health check
+                val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+                val serverIp = prefs.getString("server_ip", "10.0.2.2") ?: "10.0.2.2"
+                
                 // RTMP 서버의 HTTP 포트로 요청 (Master는 8000 포트에서 HTTP 서버 운영)
-                val url = java.net.URL("http://10.0.2.2:8000/")
+                val url = java.net.URL("http://$serverIp:8000/health")
                 val connection = url.openConnection() as java.net.HttpURLConnection
                 connection.connectTimeout = 2000 // 2초 타임아웃
                 connection.readTimeout = 2000
                 connection.requestMethod = "GET"
                 
                 val responseCode = connection.responseCode
-                connection.disconnect()
                 
                 if (responseCode == 200) {
-                    Log.d(TAG, "💚 Heartbeat: Server is alive (HTTP $responseCode)")
-                } else {
-                    Log.w(TAG, "💔 Heartbeat: Server returned $responseCode, reconnecting...")
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        forceReconnect()
+                    // JSON 응답 파싱하여 stream_active 확인
+                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+                    connection.disconnect()
+                    
+                    try {
+                        val json = org.json.JSONObject(responseBody)
+                        val streamActive = json.optBoolean("stream_active", false)
+                        
+                        if (streamActive) {
+                            // 서버도 살아있고 스트림도 활성화됨
+                            Log.d(TAG, "💚 Heartbeat: Server healthy, stream active")
+                        } else {
+                            // 서버는 살아있지만 스트림이 비활성 상태
+                            if (rtmpDisplay.isStreaming) {
+                                Log.w(TAG, "⚠️ Server alive but stream inactive on server side, reconnecting...")
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    forceReconnect()
+                                }
+                            } else {
+                                Log.w(TAG, "⚠️ Server alive but no stream (local also not streaming)")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse health response: ${e.message}")
                     }
+                } else {
+                    connection.disconnect()
+                    Log.w(TAG, "💔 Heartbeat: Server returned $responseCode")
                 }
             } catch (e: Exception) {
                 // 서버 연결 실패 = 서버가 죽었거나 재시작 중
-                Log.w(TAG, "💔 Heartbeat: Server unreachable (${e.message}), forcing reconnect...")
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    forceReconnect()
-                }
+                Log.w(TAG, "💔 Heartbeat: Server unreachable (${e.message})")
+                // 서버가 죽었을 때는 일단 대기하고, 다음 heartbeat에서 다시 확인
+                // 연결이 끊어졌다면 onDisconnect 콜백이 이미 처리함
             }
         }.start()
     }
@@ -156,20 +180,33 @@ class ScreenCaptureService : Service(), ConnectChecker {
             return
         }
         
-        Log.w(TAG, "🔄 Force reconnecting...")
+        Log.w(TAG, "🔄 Force reconnecting (attempt #${retryCount + 1})...")
         
         try {
-            rtmpDisplay.stopStream()
+            if (rtmpDisplay.isStreaming) {
+                rtmpDisplay.stopStream()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping stream: ${e.message}")
         }
         
-        isStreaming = false
+        // Wait a bit before reconnecting
         retryCount++
-        val delay = 1000L
-        updateNotification("서버 재연결 중...")
-        sendStatusBroadcast(STATUS_CONNECTING, "서버 재연결 중...")
-        reconnectHandler.postDelayed(reconnectRunnable, delay)
+        val delay = 2000L // 2초 대기 (서버 재시작 대기)
+        
+        updateNotification("서버 재연결 중... (${retryCount}회)")
+        sendStatusBroadcast(STATUS_CONNECTING, "서버 재연결 중... (${retryCount}회)")
+        
+        reconnectHandler.postDelayed({
+            if (isStreaming && !isIntentionalStop) {
+                Log.d(TAG, "🔄 Attempting to reconnect to $rtmpUrl")
+                try {
+                    rtmpDisplay.startStream(rtmpUrl)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Reconnection failed: ${e.message}")
+                }
+            }
+        }, delay)
     }
 
     override fun onCreate() {
@@ -663,20 +700,34 @@ class ScreenCaptureService : Service(), ConnectChecker {
     }
 
     override fun onDisconnect() {
-        Log.d(TAG, "🔌 Disconnected")
+        Log.d(TAG, "🔌 Disconnected from server")
         
         if (isIntentionalStop) {
             updateNotification("연결 끊김")
             sendStatusBroadcast(STATUS_DISCONNECTED, "서버와 연결이 끊어졌습니다")
-        } else {
-            // Unexpected disconnect - retry immediately with minimal delay
-            Log.w(TAG, "⚠️ Unexpected disconnect! Reconnecting immediately...")
-            retryCount++
-            val delay = 500L // 0.5초만 대기 후 즉시 재연결
-            updateNotification("재연결 중...")
-            sendStatusBroadcast(STATUS_CONNECTING, "재연결 중...")
-            reconnectHandler.postDelayed(reconnectRunnable, delay)
+            return
         }
+        
+        // Unexpected disconnect - 서버가 죽었거나 재시작 중
+        Log.w(TAG, "⚠️ Unexpected disconnect! Will attempt to reconnect...")
+        retryCount++
+        
+        // 서버가 재시작 중일 수 있으므로 조금 더 대기
+        val delay = 3000L // 3초 대기 (서버 재시작 시간 고려)
+        
+        updateNotification("서버 재연결 대기 중... (${delay/1000}초)")
+        sendStatusBroadcast(STATUS_CONNECTING, "서버 재시작 감지. ${delay/1000}초 후 재연결...")
+        
+        reconnectHandler.postDelayed({
+            if (isStreaming && !isIntentionalStop) {
+                Log.d(TAG, "🔄 Attempting reconnection after disconnect...")
+                try {
+                    rtmpDisplay.startStream(rtmpUrl)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Reconnection attempt failed: ${e.message}")
+                }
+            }
+        }, delay)
     }
 
     override fun onAuthError() {

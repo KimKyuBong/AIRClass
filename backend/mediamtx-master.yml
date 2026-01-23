@@ -39,7 +39,8 @@ webrtcICEHostNAT1To1IPs: []
 webrtcICEUDPMuxAddress: :8189
 webrtcICETCPMuxAddress: :8189
 srt: no
-api: no
+api: yes
+apiAddress: 127.0.0.1:9997
 metrics: no
 pprof: no
 playback: no
