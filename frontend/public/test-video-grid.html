@@ -6,6 +6,11 @@
     <title>AIRClass 비디오 그리드 테스트</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        .viewer-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
         .video-container {
             position: relative;
             background: #1a1a1a;
@@ -20,16 +25,11 @@
             object-fit: contain;
         }
         .video-label {
-            position: absolute;
-            top: 8px;
-            left: 8px;
-            background: rgba(0, 0, 0, 0.7);
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-            z-index: 10;
+            text-align: center;
+            color: #4b5563;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 0;
         }
         .loading-overlay {
             position: absolute;
@@ -294,23 +294,25 @@
                 log(`[${studentId}] → ${nodeName} (${data.mode})`);
 
                 // 2. HTML 요소 생성
-                const viewerDiv = document.createElement('div');
-                viewerDiv.className = `video-container ${getNodeColor(nodeName)}`;
-                viewerDiv.innerHTML = `
-                    <div class="video-label">${studentId}</div>
-                    <video autoplay playsinline muted disablepictureinpicture></video>
-                    <div class="loading-overlay">
-                        <div>
-                            <div class="text-center mb-2">⏳</div>
-                            <div>연결 중...</div>
+                const viewerWrapper = document.createElement('div');
+                viewerWrapper.className = 'viewer-wrapper';
+                viewerWrapper.innerHTML = `
+                    <div class="video-container ${getNodeColor(nodeName)}">
+                        <video autoplay playsinline muted disablepictureinpicture></video>
+                        <div class="loading-overlay">
+                            <div>
+                                <div class="text-center mb-2">⏳</div>
+                                <div>연결 중...</div>
+                            </div>
                         </div>
                     </div>
+                    <div class="video-label">${studentId}</div>
                 `;
 
-                container.appendChild(viewerDiv);
+                container.appendChild(viewerWrapper);
 
-                const videoElement = viewerDiv.querySelector('video');
-                const loadingOverlay = viewerDiv.querySelector('.loading-overlay');
+                const videoElement = viewerWrapper.querySelector('video');
+                const loadingOverlay = viewerWrapper.querySelector('.loading-overlay');
 
                 // 3. WebRTC 연결
                 const pc = new RTCPeerConnection({
@@ -388,7 +390,7 @@
                     id: studentId,
                     pc: pc,
                     nodeName: nodeName,
-                    videoElement: viewerDiv
+                    videoElement: viewerWrapper
                 });
 
                 viewerCount++;
@@ -397,18 +399,20 @@
                 log(`[${studentId}] ❌ 오류: ${error.message}`);
                 
                 // 에러 표시
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'video-container';
-                errorDiv.innerHTML = `
-                    <div class="video-label">${studentId}</div>
-                    <div class="loading-overlay">
-                        <div>
-                            <div class="text-red-500 text-2xl mb-2">❌</div>
-                            <div class="text-xs">${error.message}</div>
+                const errorWrapper = document.createElement('div');
+                errorWrapper.className = 'viewer-wrapper';
+                errorWrapper.innerHTML = `
+                    <div class="video-container">
+                        <div class="loading-overlay">
+                            <div>
+                                <div class="text-red-500 text-2xl mb-2">❌</div>
+                                <div class="text-xs">${error.message}</div>
+                            </div>
                         </div>
                     </div>
+                    <div class="video-label">${studentId}</div>
                 `;
-                container.appendChild(errorDiv);
+                container.appendChild(errorWrapper);
             }
         }
 
