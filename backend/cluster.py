@@ -310,7 +310,7 @@ class ClusterManager:
 
                                 main_node.current_connections = total_readers
                                 main_node.last_heartbeat = datetime.now()
-                                logger.debug(
+                                logger.info(
                                     f"📊 Main node connections: {total_readers}"
                                 )
                     except Exception as e:
