@@ -314,6 +314,17 @@
                 const videoElement = viewerWrapper.querySelector('video');
                 const loadingOverlay = viewerWrapper.querySelector('.loading-overlay');
 
+                // Configure video for low latency playback
+                videoElement.addEventListener('loadedmetadata', () => {
+                    log(`[${studentId}] 📹 메타데이터 로드됨 (${videoElement.videoWidth}x${videoElement.videoHeight}), 즉시 재생 시도`);
+                    videoElement.play()
+                        .then(() => {
+                            loadingOverlay.style.display = 'none';
+                            log(`[${studentId}] ▶️ loadedmetadata 후 재생 성공`);
+                        })
+                        .catch(err => log(`[${studentId}] ⚠️ loadedmetadata 후 재생 실패: ${err.message}`));
+                });
+
                 // 3. WebRTC 연결
                 const pc = new RTCPeerConnection({
                     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
