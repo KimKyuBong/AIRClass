@@ -323,22 +323,40 @@
 
                 // 트랙 수신
                 pc.ontrack = (event) => {
-                    log(`[${studentId}] 📥 트랙 수신: ${event.track.kind}, readyState: ${event.track.readyState}`);
+                    log(`[${studentId}] 📥 트랙 수신: ${event.track.kind}, readyState: ${event.track.readyState}, muted: ${event.track.muted}`);
+                    
                     if (event.streams && event.streams.length > 0) {
-                        videoElement.srcObject = event.streams[0];
+                        const stream = event.streams[0];
+                        log(`[${studentId}] Stream 정보: active=${stream.active}, tracks=${stream.getTracks().length}`);
+                        
+                        videoElement.srcObject = stream;
                         log(`[${studentId}] ✅ 비디오 srcObject 설정 완료`);
                         
-                        // 비디오 재생 시도
-                        setTimeout(() => {
+                        // Track 상태 모니터링
+                        event.track.onunmute = () => {
+                            log(`[${studentId}] 🔊 트랙 unmuted, 재생 시도`);
                             videoElement.play()
                                 .then(() => {
                                     loadingOverlay.style.display = 'none';
-                                    log(`[${studentId}] ▶️ 재생 시작`);
+                                    log(`[${studentId}] ▶️ unmute 후 재생 성공`);
+                                })
+                                .catch(err => log(`[${studentId}] unmute 후 재생 실패: ${err.message}`));
+                        };
+                        
+                        // 비디오 재생 시도
+                        setTimeout(() => {
+                            log(`[${studentId}] 재생 시도 중... readyState: ${videoElement.readyState}, paused: ${videoElement.paused}`);
+                            videoElement.play()
+                                .then(() => {
+                                    loadingOverlay.style.display = 'none';
+                                    log(`[${studentId}] ▶️ 재생 시작 성공`);
                                 })
                                 .catch(err => {
                                     log(`[${studentId}] ⚠️ 재생 실패: ${err.message}`);
                                 });
                         }, 100);
+                    } else {
+                        log(`[${studentId}] ⚠️ event.streams가 없거나 비어있음`);
                     }
                 };
 
