@@ -215,7 +215,10 @@ class ScreenCaptureService : Service(), ConnectChecker {
             
             val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
             val serverIp = prefs.getString("server_ip", "192.168.0.12") ?: "192.168.0.12"
-            rtmpUrl = "rtmp://$serverIp:1935/live/stream"
+            val nodePassword = prefs.getString("node_password", "test") ?: "test"
+            
+            // RTMP URL에 암호 추가
+            rtmpUrl = "rtmp://$serverIp:1935/live/stream?pwd=$nodePassword"
             
             Log.i(TAG, "🎬 Service Starting - Server IP: $serverIp")
             
@@ -549,6 +552,11 @@ class ScreenCaptureService : Service(), ConnectChecker {
         
         if (expand) {
             container.visibility = View.VISIBLE
+            // 윈도우 레이아웃 갱신 (크기 확장)
+            try {
+                mWindowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
+            } catch (e: Exception) {}
+
             for (i in 0 until container.childCount) {
                 val child = container.getChildAt(i)
                 val target = child.tag as PointF
@@ -558,7 +566,15 @@ class ScreenCaptureService : Service(), ConnectChecker {
             for (i in 0 until container.childCount) {
                 val child = container.getChildAt(i)
                 child.animate().translationX(0f).translationY(0f).alpha(0f).setDuration(200)
-                    .withEndAction { if (i == container.childCount - 1) container.visibility = View.GONE }.start()
+                    .withEndAction { 
+                        if (i == container.childCount - 1) {
+                            container.visibility = View.GONE
+                            // 윈도우 레이아웃 갱신 (크기 축소)
+                            try {
+                                mWindowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
+                            } catch (e: Exception) {}
+                        }
+                    }.start()
             }
         }
     }

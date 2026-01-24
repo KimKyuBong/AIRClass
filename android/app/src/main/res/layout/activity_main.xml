@@ -42,25 +42,25 @@
         app:layout_constraintTop_toBottomOf="@id/serverUrlLabel" />
 
     <TextView
-        android:id="@+id/intervalLabel"
+        android:id="@+id/passwordLabel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
-        android:text="캡쳐 간격 (밀리초):"
+        android:text="노드 암호:"
         android:textSize="16sp"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/serverUrlInput" />
 
     <EditText
-        android:id="@+id/captureIntervalInput"
+        android:id="@+id/passwordInput"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:hint="1000"
-        android:inputType="number"
+        android:hint="test"
+        android:inputType="textVisiblePassword"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/intervalLabel" />
+        app:layout_constraintTop_toBottomOf="@id/passwordLabel" />
 
     <Button
         android:id="@+id/startButton"
@@ -71,7 +71,7 @@
         android:textSize="18sp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/captureIntervalInput" />
+        app:layout_constraintTop_toBottomOf="@id/passwordInput" />
 
     <Button
         android:id="@+id/stopButton"

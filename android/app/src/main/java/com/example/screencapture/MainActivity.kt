@@ -32,6 +32,7 @@ import androidx.appcompat.widget.SwitchCompat
 class MainActivity : AppCompatActivity() {
 
     private lateinit var serverIpInput: EditText
+    private lateinit var passwordInput: EditText
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
     private lateinit var statusText: TextView
@@ -214,21 +215,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun initViews() {
         // 기존 ID 재사용 (serverUrlInput -> serverIpInput)
-        // XML을 수정하지 않고 기존 ID를 그대로 사용하되 의미만 변경
         serverIpInput = findViewById(R.id.serverUrlInput)
         
-        // interval 입력창은 숨기거나 무시 (ID는 유지)
-        val intervalInput: EditText = findViewById(R.id.captureIntervalInput)
-        intervalInput.isEnabled = false
-        intervalInput.hint = "비디오 모드에서는 사용 안함"
+        // 암호 입력 필드
+        passwordInput = findViewById(R.id.passwordInput)
 
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
         statusText = findViewById(R.id.statusText)
         fabOptions = findViewById(R.id.fabOptions)
 
-        // 기본 IP 설정 (Android 에뮬레이터용)
-        serverIpInput.setText("10.0.2.2")
+        // 설정 불러오기
+        val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+        serverIpInput.setText(prefs.getString("server_ip", "10.100.0.102"))
+        passwordInput.setText(prefs.getString("node_password", "test"))
         
         updateUI(false)
     }
@@ -236,15 +236,17 @@ class MainActivity : AppCompatActivity() {
     private fun setupListeners() {
         startButton.setOnClickListener {
             val serverIp = serverIpInput.text.toString()
+            val password = passwordInput.text.toString() // 암호 읽기
 
             if (serverIp.isEmpty()) {
                 Toast.makeText(this, "서버 IP를 입력하세요", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // SharedPreferences에 설정 저장
+            // SharedPreferences에 설정 저장 (IP 및 암호)
             getSharedPreferences("settings", MODE_PRIVATE).edit().apply {
                 putString("server_ip", serverIp)
+                putString("node_password", password)
                 apply()
             }
 
