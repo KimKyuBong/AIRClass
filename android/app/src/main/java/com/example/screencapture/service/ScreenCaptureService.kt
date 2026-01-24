@@ -294,6 +294,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
             val audioReady = if (audioEnabled) rtmpDisplay.prepareAudio() else true
             
             // 계산된 최종 해상도로 인코더 준비
+            Log.i(TAG, "📐 Screen metrics: ${screenWidth}x${screenHeight}, Portrait: $isPortrait")
+            Log.i(TAG, "📐 Encoder resolution: ${width}x${height} @ ${fps}fps, ${bitrate/1024}kbps")
+            
             val videoReady = rtmpDisplay.prepareVideo(
                 width, height, fps, bitrate, 0, iFrameInterval
             )
@@ -506,7 +509,10 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 y = 200
             }
 
-            floatingLayout = FrameLayout(this)
+            floatingLayout = FrameLayout(this).apply {
+                // Disable hardware acceleration to fix black screen issue
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            }
             
             menuContainer = FrameLayout(this).apply {
                 visibility = View.GONE
@@ -523,6 +529,8 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 setPadding(15, 15, 15, 15)
                 elevation = 10f
                 alpha = 0.6f
+                // Disable hardware acceleration to fix black screen issue
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
             }
             
             floatingLayout?.addView(mainBall, FrameLayout.LayoutParams(ballSize, ballSize))
@@ -605,7 +613,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
         val params = FrameLayout.LayoutParams(btnSize, btnSize)
         val distance = ballSize.toFloat() * 1.2f
         val angle = when(index) {
-            1 -> -45.0; 2 -> 0.0; else -> 45.0
+            1 -> 0.0    // Right
+            2 -> 45.0   // Bottom-Right
+            else -> 90.0 // Bottom
         }
         val rad = Math.toRadians(angle)
         
@@ -632,11 +642,15 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 floatingLayoutParams?.width = expandedSize
                 floatingLayoutParams?.height = expandedSize
                 mWindowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
-            } catch (e: Exception) {}
+                Log.d(TAG, "🎯 Menu expanded - Window size: ${floatingLayoutParams?.width}x${floatingLayoutParams?.height}")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to expand window: ${e.message}")
+            }
 
             for (i in 0 until container.childCount) {
                 val child = container.getChildAt(i)
                 val target = child.tag as PointF
+                Log.d(TAG, "🎯 Menu item $i -> target: (${target.x}, ${target.y})")
                 child.animate()
                     .translationX(target.x)
                     .translationY(target.y)
