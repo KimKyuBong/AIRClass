@@ -623,25 +623,42 @@ class ScreenCaptureService : Service(), ConnectChecker {
         
         if (expand) {
             container.visibility = View.VISIBLE
+            
             // 윈도우 레이아웃 갱신 (크기 확장)
+            // 메뉴가 펼쳐질 공간 확보를 위해 윈도우 크기를 강제로 늘림
+            // 애니메이션은 translation을 쓰지만 레이아웃 bounds는 변하지 않기 때문에 필수
             try {
+                val expandedSize = (250 * resources.displayMetrics.density).toInt()
+                floatingLayoutParams?.width = expandedSize
+                floatingLayoutParams?.height = expandedSize
                 mWindowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
             } catch (e: Exception) {}
 
             for (i in 0 until container.childCount) {
                 val child = container.getChildAt(i)
                 val target = child.tag as PointF
-                child.animate().translationX(target.x).translationY(target.y).alpha(1f).setDuration(200).start()
+                child.animate()
+                    .translationX(target.x)
+                    .translationY(target.y)
+                    .alpha(1f)
+                    .setDuration(200)
+                    .start()
             }
         } else {
             for (i in 0 until container.childCount) {
                 val child = container.getChildAt(i)
-                child.animate().translationX(0f).translationY(0f).alpha(0f).setDuration(200)
+                child.animate()
+                    .translationX(0f)
+                    .translationY(0f)
+                    .alpha(0f)
+                    .setDuration(200)
                     .withEndAction { 
                         if (i == container.childCount - 1) {
                             container.visibility = View.GONE
-                            // 윈도우 레이아웃 갱신 (크기 축소)
+                            // 윈도우 레이아웃 갱신 (크기 축소 - 메인 볼 크기로 복귀)
                             try {
+                                floatingLayoutParams?.width = WindowManager.LayoutParams.WRAP_CONTENT
+                                floatingLayoutParams?.height = WindowManager.LayoutParams.WRAP_CONTENT
                                 mWindowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
                             } catch (e: Exception) {}
                         }
