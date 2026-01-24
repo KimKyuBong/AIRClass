@@ -186,6 +186,10 @@ class ClusterManager:
         """
         healthy_nodes = [n for n in self.nodes.values() if n.is_healthy]
 
+        logger.info(
+            f"🔍 Rendezvous candidates for '{stream_id}': {[n.node_name for n in healthy_nodes]}"
+        )
+
         if not healthy_nodes:
             logger.error("❌ No healthy nodes available!")
             return None
@@ -289,32 +293,40 @@ class ClusterManager:
         """주기적으로 노드 헬스 체크 및 메인 노드 상태 업데이트"""
         while True:
             try:
-                await asyncio.sleep(10)  # 10초마다
-
                 # 메인 노드 자신의 연결 수 업데이트
                 if self.main_node_id and self.main_node_id in self.nodes:
                     try:
                         main_node = self.nodes[self.main_node_id]
-                        async with httpx.AsyncClient(timeout=2.0) as client:
-                            # MediaMTX API로 현재 연결 수 조회
+                        logger.info(f"🔍 Updating main node stats via MediaMTX API")
+                        async with httpx.AsyncClient(
+                            timeout=2.0, follow_redirects=True
+                        ) as client:
+                            # MediaMTX API로 현재 연결 수 조회 (API 포트는 9997)
                             response = await client.get(
-                                f"http://{main_node.host}:{main_node.webrtc_port}/v3/paths/list"
+                                f"http://127.0.0.1:9997/v3/paths/list/"
+                            )
+                            logger.info(
+                                f"📡 MediaMTX API response: {response.status_code}"
                             )
                             if response.status_code == 200:
-                                data = response.json()
-                                # readers 수를 합산
-                                total_readers = 0
-                                if "items" in data:
-                                    for item in data["items"]:
-                                        total_readers += item.get("readers", 0)
+                                try:
+                                    data = response.json()
+                                    # readers 수를 합산 (readers는 리스트이므로 len() 사용)
+                                    total_readers = 0
+                                    if "items" in data:
+                                        for item in data["items"]:
+                                            readers = item.get("readers", [])
+                                            total_readers += len(readers)
 
-                                main_node.current_connections = total_readers
-                                main_node.last_heartbeat = datetime.now()
-                                logger.info(
-                                    f"📊 Main node connections: {total_readers}"
-                                )
+                                    main_node.current_connections = total_readers
+                                    main_node.last_heartbeat = datetime.now()
+                                    logger.info(
+                                        f"📊 Main node connections: {total_readers}"
+                                    )
+                                except Exception as json_error:
+                                    logger.error(f"❌ JSON parse error: {json_error}")
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to update main node stats: {e}")
+                        logger.error(f"⚠️ Failed to update main node stats: {e}")
 
                 # Sub 노드들 헬스 체크
                 for node_id, node in list(self.nodes.items()):
@@ -329,6 +341,9 @@ class ClusterManager:
                             f"⚠️ Node {node.node_name} is offline (no heartbeat for {age.seconds}s)"
                         )
                         node.status = "offline"
+
+                # 10초 대기 후 다음 체크
+                await asyncio.sleep(10)
 
             except asyncio.CancelledError:
                 break
