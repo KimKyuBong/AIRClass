@@ -22,6 +22,7 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.OrientationEventListener
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Button
@@ -237,6 +238,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
     private fun startStream(resultCode: Int, data: Intent, isReconnection: Boolean = false) {
         if (isStreaming) return
         
+        // 1. 시작하는 순간의 화면 상태(가로/세로)를 최신으로 갱신
+        initScreenMetrics()
+        
         if (!isReconnection) {
             savedResultCode = resultCode
             savedData = data
@@ -246,17 +250,30 @@ class ScreenCaptureService : Service(), ConnectChecker {
             val streamingPrefs = getSharedPreferences("streaming_settings", Context.MODE_PRIVATE)
             val useNativeRes = streamingPrefs.getBoolean("use_native_res", false)
             
+            // 2. 현재 기기 방향 확인
+            val isPortrait = screenWidth < screenHeight
+            
             val (width, height) = if (useNativeRes) {
                 val nativeWidth = (screenWidth / 2) * 2
                 val nativeHeight = (screenHeight / 2) * 2
                 Pair(nativeWidth, nativeHeight)
             } else {
                 val resolutionIndex = streamingPrefs.getInt("resolution", 0)
-                when (resolutionIndex) {
+                // 기본값은 가로(Landscape) 기준
+                val (baseW, baseH) = when (resolutionIndex) {
                     0 -> Pair(1920, 1080)
                     1 -> Pair(2560, 1440)
                     2 -> Pair(3840, 2160)
                     else -> Pair(1920, 1080)
+                }
+                
+                // 현재 기기 방향에 맞춰 가로/세로 자동 스왑 (자유로운 변환)
+                if (isPortrait) {
+                    // 세로 모드: 너비 < 높이
+                    Pair(kotlin.math.min(baseW, baseH), kotlin.math.max(baseW, baseH))
+                } else {
+                    // 가로 모드: 너비 > 높이
+                    Pair(kotlin.math.max(baseW, baseH), kotlin.math.min(baseW, baseH))
                 }
             }
             
@@ -276,8 +293,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
             
             val audioReady = if (audioEnabled) rtmpDisplay.prepareAudio() else true
             
+            // 계산된 최종 해상도로 인코더 준비
             val videoReady = rtmpDisplay.prepareVideo(
-                screenWidth, screenHeight, fps, bitrate, 0, iFrameInterval
+                width, height, fps, bitrate, 0, iFrameInterval
             )
             
             if (!audioReady || !videoReady) {
@@ -288,7 +306,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
             
             rtmpDisplay.setIntentResult(resultCode, data)
             
-            Log.i(TAG, "📡 Starting stream to: $rtmpUrl")
+            Log.i(TAG, "📡 Starting stream to: $rtmpUrl ($width x $height, ${if(isPortrait) "Portrait" else "Landscape"})")
             sendStatusBroadcast(STATUS_STARTING, "스트리밍 준비 완료. 서버 연결 중...", rtmpUrl)
             
             isIntentionalStop = false 
@@ -300,6 +318,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
             startPerformanceMonitoring()
             startHeartbeat()
             startKeepAliveAnimation() // CRITICAL for static screens
+            startOrientationListener() // 화면 회전 감지 시작
             showFloatingControl()
             
             updateNotification("스트리밍 중...")
@@ -311,6 +330,57 @@ class ScreenCaptureService : Service(), ConnectChecker {
         }
     }
 
+    // Orientation handling
+    private var orientationEventListener: OrientationEventListener? = null
+    private var lastOrientation = -1
+    
+    private fun startOrientationListener() {
+        if (orientationEventListener == null) {
+            orientationEventListener = object : OrientationEventListener(this) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) return
+                    
+                    // Convert to 0, 90, 180, 270 (with some tolerance)
+                    val newOrientation = when {
+                        orientation >= 340 || orientation < 20 -> 0   // Portrait
+                        orientation in 70..110 -> 90                  // Landscape
+                        orientation in 160..200 -> 180                // Reverse Portrait
+                        orientation in 250..290 -> 270                // Reverse Landscape
+                        else -> return // Ignore intermediate angles
+                    }
+                    
+                    if (lastOrientation != -1 && lastOrientation != newOrientation) {
+                        // Orientation changed (e.g. Portrait <-> Landscape)
+                        val isPortraitToLandscape = (lastOrientation == 0 || lastOrientation == 180) && (newOrientation == 90 || newOrientation == 270)
+                        val isLandscapeToPortrait = (lastOrientation == 90 || lastOrientation == 270) && (newOrientation == 0 || newOrientation == 180)
+                        
+                        if (isPortraitToLandscape || isLandscapeToPortrait) {
+                            Log.i(TAG, "🔄 Orientation changed: $lastOrientation -> $newOrientation. Restarting stream...")
+                            
+                            // Debounce restart (wait for rotation to settle)
+                            stopOrientationListener() // Prevent multiple triggers
+                            
+                            android.os.Handler(Looper.getMainLooper()).postDelayed({
+                                restartStreamWithNewSettings()
+                            }, 1000) // 1 second delay for UI to settle
+                        }
+                    }
+                    lastOrientation = newOrientation
+                }
+            }
+        }
+        
+        if (orientationEventListener?.canDetectOrientation() == true) {
+            orientationEventListener?.enable()
+            Log.i(TAG, "🔄 Orientation listener started")
+        }
+    }
+    
+    private fun stopOrientationListener() {
+        orientationEventListener?.disable()
+        Log.i(TAG, "🔄 Orientation listener stopped")
+    }
+
     private fun stopStream() {
         if (!isStreaming) return
         
@@ -318,6 +388,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
         reconnectHandler.removeCallbacks(reconnectRunnable)
         stopHeartbeat()
         stopKeepAliveAnimation()
+        stopOrientationListener() // Stop orientation listener
         
         try {
             stopPerformanceMonitoring()
