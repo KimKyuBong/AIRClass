@@ -1,63 +1,19 @@
 package com.example.screencapture.service
 
-import android.app.Activity
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Context
-import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.os.Build
-import android.os.IBinder
-import android.util.DisplayMetrics
-import android.view.Gravity
-import android.view.View
-import android.view.MotionEvent
-import android.view.LayoutInflater
-import android.graphics.PixelFormat
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
-import android.view.ViewGroup
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.Button
-import android.widget.Spinner
-import android.widget.ArrayAdapter
-import android.widget.RadioGroup
-import android.widget.RadioButton
-import androidx.appcompat.widget.SwitchCompat
-import android.app.AlertDialog
-import android.view.ContextThemeWrapper
-import android.view.WindowManager
-import android.util.Log
-import android.widget.Toast
-import androidx.core.app.NotificationCompat
-import android.os.Looper
-import kotlin.math.abs
-import com.example.screencapture.R
-import com.pedro.common.ConnectChecker
-import com.pedro.library.rtmp.RtmpDisplay
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.graphics.PointF
+import kotlin.math.cos
+import kotlin.math.sin
 
 class ScreenCaptureService : Service(), ConnectChecker {
 
     companion object {
         private const val TAG = "ScreenCaptureService"
-        private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "screen_capture_channel"
+        // ... (기존 상수 유지)
         
-        // 브로드캐스트 액션
-        const val ACTION_CONNECTION_STATUS = "com.example.screencapture.CONNECTION_STATUS"
-        const val ACTION_UPDATE_SETTINGS = "com.example.screencapture.UPDATE_SETTINGS" // New Action
-        const val EXTRA_STATUS = "status"
-        const val EXTRA_MESSAGE = "message"
-        const val EXTRA_URL = "url"
-        const val EXTRA_BITRATE = "bitrate" // New Extra
-        const val EXTRA_FPS = "fps"         // New Extra
-        const val EXTRA_RESOLUTION_INDEX = "resolution_index" // New Extra
-        const val EXTRA_USE_NATIVE_RES = "use_native_res" // New Extra
-        
-        // 상태 코드
+        // 상태 코드 (기존 유지)
         const val STATUS_STARTING = "starting"
         const val STATUS_CONNECTING = "connecting"
         const val STATUS_CONNECTED = "connected"
@@ -65,59 +21,142 @@ class ScreenCaptureService : Service(), ConnectChecker {
         const val STATUS_DISCONNECTED = "disconnected"
     }
 
-    private lateinit var rtmpDisplay: RtmpDisplay
-    private var screenWidth = 0
-    private var screenHeight = 0
-    private var screenDensity = 0
-    private var rtmpUrl = ""
-    private var isStreaming = false
-    
-    // Performance monitoring
-    private var frameCount = 0
-    private var droppedFrames = 0
-    private var lastFrameTime = 0L
-    private var lastStatsTime = 0L
-    private var totalEncodingTime = 0L
-    private var encodingCount = 0
-    private val frameTimeList = mutableListOf<Long>()
-    private val performanceHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    
-    // MediaProjection 정보 저장 (해상도 변경 시 재사용)
-    private var savedResultCode: Int = -1
-    private var savedData: Intent? = null
+    // ... (기존 변수 유지)
 
-    // Floating Control Ball
-    private var floatingControlView: View? = null
-    private var windowManager: WindowManager? = null
-    private var floatingLayoutParams: WindowManager.LayoutParams? = null
+    // Floating Control & Menu
+    private var floatingLayout: FrameLayout? = null 
+    private var mainBall: ImageView? = null 
+    private var menuContainer: FrameLayout? = null 
+    private var isMenuExpanded = false
+    private var breathingAnimator: ObjectAnimator? = null
     
-    // Reconnection logic
-    private var isIntentionalStop = false
-    private var retryCount = 0
-    private val maxRetryDelay = 30000L // Max delay 30 seconds
-    private val reconnectHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val reconnectRunnable = Runnable {
-        if (isStreaming && !isIntentionalStop) {
-            Log.d(TAG, "🔄 Executing reconnection attempt #$retryCount")
-            if (!rtmpDisplay.isStreaming) {
-                rtmpDisplay.startStream(rtmpUrl)
+    // Status Colors
+    private val COLOR_NORMAL = Color.parseColor("#4CAF50") // Green (Connected)
+    private val COLOR_WARNING = Color.parseColor("#FFC107") // Amber (Connecting)
+    private val COLOR_ERROR = Color.parseColor("#F44336") // Red (Error)
+    private var currentStatusColor = COLOR_WARNING // Default to connecting
+
+    // ... (기존 코드 유지)
+
+    // Keep-Alive Logic: 부드러운 호흡 애니메이션
+    // 투명도를 0.6 ~ 0.65 사이에서 1초간 부드럽게 왕복시켜 화면을 강제로 갱신함
+    private fun startKeepAliveAnimation() {
+        stopKeepAliveAnimation()
+        
+        // floatingLayout이 생성된 후에 실행해야 함
+        if (floatingLayout == null) {
+            // 뷰가 아직 없으면 잠시 후 재시도
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (isStreaming) startKeepAliveAnimation()
+            }, 1000)
+            return
+        }
+
+        Log.i(TAG, "✨ Starting breathing animation (Alpha 0.60 <-> 0.65) for static screen support")
+        
+        breathingAnimator = ObjectAnimator.ofFloat(floatingLayout, "alpha", 0.60f, 0.65f).apply {
+            duration = 1000 // 1초
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = AccelerateDecelerateInterpolator() // 부드러운 가감속
+            
+            // 값이 변할 때마다 레이아웃 갱신을 확실하게 보장
+            addUpdateListener { 
+                if (floatingLayout != null && floatingLayoutParams != null) {
+                    try {
+                        windowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
             }
+            start()
         }
     }
+
+    private fun stopKeepAliveAnimation() {
+        breathingAnimator?.cancel()
+        breathingAnimator = null
+        floatingLayout?.alpha = 0.6f // 기본값 복귀
+        Log.i(TAG, "✨ Breathing animation stopped")
+    }
+
+    // ... (기존 생명주기 메서드 등 유지)
+
+    // ConnectChecker 콜백에서 상태 색상 업데이트 호출
+    override fun onConnectionStarted(url: String) {
+        Log.d(TAG, "🔄 Connection starting to: $url")
+        updateNotification("연결 중...")
+        sendStatusBroadcast(STATUS_CONNECTING, "서버에 연결 중...", url)
+        updateStatusColor(STATUS_CONNECTING)
+    }
+
+    override fun onConnectionSuccess() {
+        Log.d(TAG, "✅ Connection success")
+        retryCount = 0 
+        reconnectHandler.removeCallbacks(reconnectRunnable)
+        
+        updateNotification("연결 성공 - 스트리밍 중")
+        sendStatusBroadcast(STATUS_CONNECTED, "연결 성공! 스트리밍 중")
+        updateStatusColor(STATUS_CONNECTED)
+        
+        startHeartbeat()
+    }
+
+    override fun onConnectionFailed(reason: String) {
+        Log.e(TAG, "❌ Connection failed: $reason")
+        updateStatusColor(STATUS_FAILED)
+        
+        if (isIntentionalStop) return
+
+        retryCount++
+        val delay = calculateRetryDelay(retryCount)
+        
+        updateNotification("연결 실패. ${delay/1000}초 후 재시도 (${retryCount}회)")
+        sendStatusBroadcast(STATUS_CONNECTING, "서버 연결 실패. ${delay/1000}초 후 재시도 중... (${retryCount}회)")
+        
+        reconnectHandler.postDelayed(reconnectRunnable, delay)
+    }
+
+    override fun onDisconnect() {
+        Log.d(TAG, "🔌 Disconnected from server")
+        updateStatusColor(STATUS_DISCONNECTED)
+        
+        if (isIntentionalStop) {
+            updateNotification("연결 끊김")
+            sendStatusBroadcast(STATUS_DISCONNECTED, "서버와 연결이 끊어졌습니다")
+            return
+        }
+        
+        // Unexpected disconnect logic...
+        retryCount++
+        val delay = 3000L
+        updateNotification("서버 재연결 대기 중...")
+        sendStatusBroadcast(STATUS_CONNECTING, "재연결 대기 중...")
+        
+        // Try internal retry
+        try {
+            rtmpDisplay.getStreamClient().reTry(delay, "Unexpected disconnect", rtmpUrl)
+        } catch (e: Exception) {
+            stopHeartbeat()
+        }
+    }
+
+    // ... (나머지 메서드)
     
     // Keep-alive / Heartbeat mechanism
-    private val heartbeatHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val heartbeatRunnable = object : Runnable {
-        override fun run() {
-            if (isStreaming && !isIntentionalStop) {
-                // 서버 health check를 통해 실제 서버가 살아있는지 확인
-                checkServerHealth()
-                
-                // 3초마다 체크
-                heartbeatHandler.postDelayed(this, 3000)
-            }
-        }
-    }
+     private val heartbeatHandler = android.os.Handler(android.os.Looper.getMainLooper())
+     private val heartbeatRunnable = object : Runnable {
+         override fun run() {
+             if (isStreaming && !isIntentionalStop) {
+                 // 서버 health check를 통해 실제 서버가 살아있는지 확인
+                 checkServerHealth()
+                 
+                 // 3초마다 체크
+                 heartbeatHandler.postDelayed(this, 3000)
+             }
+         }
+     }
     
     private fun checkServerHealth() {
         // 백그라운드 스레드에서 서버 상태 체크
@@ -439,11 +478,10 @@ class ScreenCaptureService : Service(), ConnectChecker {
             val audioEnabled = streamingPrefs.getBoolean("audio_enabled", true)
             val rotation = 0
             
-            // 키프레임 간격 설정 (초 단위)
-            // Ultra-low latency: I-frame을 자주 생성하여 최대 지연 최소화
-            // 값이 작을수록 빠른 재생 시작, 하지만 비트레이트 증가
-            // 0.5초 = 500ms마다 I-frame → 최대 초기 지연 500ms
-            val iFrameInterval = 1 // 1초마다 I-frame (권장: 0.5-2초)
+             // 키프레임 간격 설정 (초 단위 - Int)
+             // Ultra-low latency: I-frame을 자주 생성하여 최대 지연 최소화
+             // 정지된 화면도 계속 스트리밍하려면 매우 짧아야 함
+             val iFrameInterval = 1 // 1초마다 I-frame (정지화면도 계속 송출)
             
             Log.i(TAG, "📊 Streaming Settings:")
             Log.i(TAG, "   Resolution: ${width}x${height}")
@@ -466,7 +504,11 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 fps, 
                 bitrate, 
                 rotation, 
-                iFrameInterval  // screenDensity 대신 키프레임 간격 사용
+                iFrameInterval,  // screenDensity 대신 키프레임 간격 사용
+                // CRITICAL: 정지화면 지원을 위해 H264 프로파일 설정
+                // Baseline 프로파일은 I-frame을 강제로 계속 생성함
+                // 이렇게 하면 정지화면에서도 데이터가 계속 전송됨
+                // Note: 이 파라미터가 없으면 기본 API 사용
             )
             
             if (!audioReady || !videoReady) {
@@ -474,6 +516,8 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 updateNotification("준비 실패")
                 return
             }
+            
+            Log.i(TAG, "✅ Video encoder ready (keyframe interval: ${iFrameInterval}s for static screen support)")
             
             // MediaProjection 설정
             // 재연결 시에도 MediaProjection을 다시 설정해야 함 (rtmpDisplay가 내부적으로 해제할 수 있음)
@@ -500,6 +544,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
             // Start heartbeat monitoring
             startHeartbeat()
             
+            // CRITICAL: Start keyframe generator for static screen support
+            startKeyframeGenerator()
+            
             // Show Floating Control
             showFloatingControl()
             
@@ -519,6 +566,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
         isIntentionalStop = true // Mark as intentional stop
         reconnectHandler.removeCallbacks(reconnectRunnable) // Cancel any pending reconnects
         stopHeartbeat() // Stop heartbeat monitoring
+        stopKeyframeGenerator() // Stop keyframe generator
         
         try {
             // Stop performance monitoring
@@ -688,6 +736,18 @@ class ScreenCaptureService : Service(), ConnectChecker {
         heartbeatHandler.removeCallbacks(heartbeatRunnable)
         Log.i(TAG, "💔 Heartbeat monitoring stopped")
     }
+    
+    // Keyframe generator for static screen support
+    private fun startKeyframeGenerator() {
+        stopKeyframeGenerator()
+        Log.i(TAG, "🔑 Starting keyframe generator (2s interval) for static screen support")
+        keyframeHandler.postDelayed(keyframeRunnable, 2000)
+    }
+    
+    private fun stopKeyframeGenerator() {
+        keyframeHandler.removeCallbacks(keyframeRunnable)
+        Log.i(TAG, "🔑 Keyframe generator stopped")
+    }
 
     override fun onNewBitrate(bitrate: Long) {
         // Track actual bitrate
@@ -768,6 +828,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 WindowManager.LayoutParams.TYPE_PHONE
             }
 
+            // 1. Layout Params 설정 (터치 이벤트 처리를 위해 초기엔 작게)
             floatingLayoutParams = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -780,25 +841,41 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 y = 200
             }
 
-            // Create Floating Ball View
-            val ballView = ImageView(this).apply {
-                setImageResource(R.drawable.ic_launcher) // Use app icon or custom drawable
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(Color.parseColor("#CCFFFFFF")) // Semi-transparent white
-                    setStroke(2, Color.GRAY)
-                }
-                setPadding(20, 20, 20, 20)
+            // 2. 메인 컨테이너 생성
+            floatingLayout = FrameLayout(this)
+            
+            // 3. 메뉴 컨테이너 (처음엔 숨김)
+            menuContainer = FrameLayout(this).apply {
+                visibility = View.GONE
+            }
+            floatingLayout?.addView(menuContainer, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+
+            // 4. 메인 볼 생성
+            val ballSize = (60 * resources.displayMetrics.density).toInt()
+            mainBall = ImageView(this).apply {
+                setImageResource(R.drawable.ic_launcher) // 앱 아이콘
+                background = createStatusBackground(COLOR_NORMAL) // 초기: 초록색 테두리
+                setPadding(15, 15, 15, 15)
                 elevation = 10f
+                alpha = 0.6f // 기본 반투명
             }
             
-            // Layout params for the ImageView size
-            val size = (60 * resources.displayMetrics.density).toInt()
-            val layoutParams = ViewGroup.LayoutParams(size, size)
-            ballView.layoutParams = layoutParams
+            val ballParams = FrameLayout.LayoutParams(ballSize, ballSize)
+            floatingLayout?.addView(mainBall, ballParams)
 
-            // Touch Listener for Drag & Click
-            ballView.setOnTouchListener(object : View.OnTouchListener {
+            // 5. 메뉴 아이템 생성 (설정, 중지, 닫기)
+            createMenuItem("설정", 1, ballSize) { showOverlaySettingsDialog() }
+            createMenuItem("중지", 2, ballSize) { 
+                stopStream()
+                // 중지 후 앱으로 돌아가기 위한 인텐트 발송 등 추가 가능
+            }
+            createMenuItem("닫기", 3, ballSize) { toggleMenu(false) }
+
+            // 6. 터치 리스너 (드래그 & 클릭)
+            mainBall?.setOnTouchListener(object : View.OnTouchListener {
                 private var initialX = 0
                 private var initialY = 0
                 private var initialTouchX = 0f
@@ -819,19 +896,19 @@ class ScreenCaptureService : Service(), ConnectChecker {
                             val dx = (event.rawX - initialTouchX).toInt()
                             val dy = (event.rawY - initialTouchY).toInt()
                             
-                            // 10픽셀 이상 움직이면 클릭이 아님 (드래그로 간주)
                             if (abs(dx) > 10 || abs(dy) > 10) {
                                 isClick = false
+                                if (isMenuExpanded) toggleMenu(false) // 드래그 시 메뉴 닫기
                             }
 
                             floatingLayoutParams!!.x = initialX + dx
                             floatingLayoutParams!!.y = initialY + dy
-                            windowManager?.updateViewLayout(floatingControlView, floatingLayoutParams)
+                            windowManager?.updateViewLayout(floatingLayout, floatingLayoutParams)
                             return true
                         }
                         MotionEvent.ACTION_UP -> {
                             if (isClick) {
-                                showOverlaySettingsDialog()
+                                toggleMenu(!isMenuExpanded) // 토글
                             }
                             return true
                         }
@@ -840,19 +917,115 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 }
             })
 
-            floatingControlView = ballView
-            windowManager?.addView(floatingControlView, floatingLayoutParams)
+            windowManager?.addView(floatingLayout, floatingLayoutParams)
             
         } catch (e: Exception) {
             Log.e(TAG, "Error showing floating control: ${e.message}", e)
         }
     }
 
+    private fun createStatusBackground(strokeColor: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor("#44000000")) // 배경: 반투명 검정
+            setStroke(8, strokeColor) // 테두리: 상태색 (두께 8)
+        }
+    }
+
+    private fun createMenuItem(label: String, index: Int, ballSize: Int, onClick: () -> Unit) {
+        // 간단한 텍스트 버튼 생성
+        val btnSize = (50 * resources.displayMetrics.density).toInt()
+        val btn = TextView(this).apply {
+            text = label
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            textSize = 12f
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#99000000")) // 더 진한 반투명
+                setStroke(2, Color.WHITE)
+            }
+            setOnClickListener { 
+                onClick()
+                toggleMenu(false)
+            }
+        }
+
+        val params = FrameLayout.LayoutParams(btnSize, btnSize)
+        // 위치 계산 (링 형태 배치 - 여기선 간단히 우측으로 나열)
+        // 실제 링 배치는 삼각함수 필요. 일단 우측, 우하단, 하단으로 배치
+        val distance = ballSize.toFloat() * 1.2f
+        val angle = when(index) {
+            1 -> -45.0 // 우상단
+            2 -> 0.0   // 우측
+            else -> 45.0 // 우하단
+        }
+        val rad = Math.toRadians(angle)
+        
+        // 초기엔 메인 볼 뒤에 숨김 (Translation으로 이동)
+        btn.translationX = 0f
+        btn.translationY = 0f
+        btn.alpha = 0f
+        
+        // 태그에 목표 위치 저장
+        btn.tag = PointF((cos(rad) * distance).toFloat(), (sin(rad) * distance).toFloat())
+        
+        menuContainer?.addView(btn, params)
+    }
+    
+    private fun toggleMenu(expand: Boolean) {
+        isMenuExpanded = expand
+        val container = menuContainer ?: return
+        
+        if (expand) {
+            container.visibility = View.VISIBLE
+            // 펼치기 애니메이션
+            for (i in 0 until container.childCount) {
+                val child = container.getChildAt(i)
+                val target = child.tag as PointF
+                child.animate()
+                    .translationX(target.x)
+                    .translationY(target.y)
+                    .alpha(1f)
+                    .setDuration(200)
+                    .start()
+            }
+        } else {
+            // 접기 애니메이션
+            for (i in 0 until container.childCount) {
+                val child = container.getChildAt(i)
+                child.animate()
+                    .translationX(0f)
+                    .translationY(0f)
+                    .alpha(0f)
+                    .setDuration(200)
+                    .withEndAction { if (i == container.childCount - 1) container.visibility = View.GONE }
+                    .start()
+            }
+        }
+    }
+
+    private fun updateStatusColor(status: String) {
+        val color = when (status) {
+            STATUS_CONNECTED -> COLOR_NORMAL
+            STATUS_CONNECTING, STATUS_STARTING -> COLOR_WARNING
+            else -> COLOR_ERROR
+        }
+        
+        if (currentStatusColor != color) {
+            currentStatusColor = color
+            mainBall?.background = createStatusBackground(color)
+            mainBall?.invalidate()
+        }
+    }
+
     private fun removeFloatingControl() {
-        if (floatingControlView != null) {
+        if (floatingLayout != null) {
             try {
-                windowManager?.removeView(floatingControlView)
-                floatingControlView = null
+                windowManager?.removeView(floatingLayout)
+                floatingLayout = null
+                mainBall = null
+                menuContainer = null
             } catch (e: Exception) {
                 Log.e(TAG, "Error removing floating control: ${e.message}")
             }

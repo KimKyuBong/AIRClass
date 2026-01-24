@@ -866,7 +866,10 @@ async def health_check():
                         readers = item.get("readers", [])
                         source = item.get("source")
 
-                        if ready or len(readers) > 0 or source:
+                        # stream_active는 실제 publisher(source)가 있을 때만 true
+                        # ready는 source가 있고 트랙이 준비된 상태
+                        # readers는 시청자이므로 stream_active 판단에서 제외
+                        if ready and source:
                             stream_active = True
                             logger.debug(
                                 f"Stream active: ready={ready}, readers={len(readers)}, source={source is not None}"

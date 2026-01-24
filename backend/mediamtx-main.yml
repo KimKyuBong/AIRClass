@@ -5,8 +5,8 @@ logLevel: info
 logDestinations: [stdout]
 
 # Ultra-low latency settings
-readTimeout: 30s  # Longer timeout to handle network issues
-writeTimeout: 30s
+readTimeout: 24h  # Infinite timeout for static screens
+writeTimeout: 24h
 readBufferCount: 256  # Further reduced from 512 for minimum latency
 udpMaxPayloadSize: 1472  # Optimize for network MTU
 

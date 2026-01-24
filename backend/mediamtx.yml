@@ -14,8 +14,8 @@ logDestinations: [stdout]
 logFile: mediamtx.log
 
 # Timeout of read operations.
-# Reduced for lower latency when receiving RTMP streams
-readTimeout: 3s
+# Increased to prevent disconnections from mobile devices
+readTimeout: 60s
 # Timeout of write operations.
 writeTimeout: 10s
 # Size of the queue of outgoing packets.
