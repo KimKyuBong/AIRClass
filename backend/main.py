@@ -811,7 +811,8 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
 
     webrtc_url = f"http://{node_host}:{webrtc_port}/live/stream/whep?jwt={token}"
 
-    return {
+    # 응답 데이터 생성
+    response_data = {
         "token": token,
         "webrtc_url": webrtc_url,
         "expires_in": JWT_EXPIRATION_MINUTES * 60,
@@ -819,6 +820,13 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
         "user_id": user_id,
         "mode": mode,
     }
+
+    # Main 모드에서 직접 서빙하는 경우 node_name 추가
+    if mode == "main":
+        response_data["node_name"] = os.getenv("NODE_NAME", "main")
+        response_data["node_id"] = os.getenv("NODE_ID", "main")
+
+    return response_data
 
 
 # ============================================================
