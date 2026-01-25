@@ -50,25 +50,33 @@ AIRClass는 교사들이 쉽게 사용할 수 있는 실시간 화면 공유 플
 
 3. **초기 설정**
    ```cmd
-   setup.bat
+   airclass.bat install
    ```
    - 서버 IP 주소 입력 (cmd에서 `ipconfig` 입력하여 확인)
    - 클래스 비밀번호 입력 (예: myclass2025)
 
 4. **서버 시작**
    ```cmd
-   start.bat
+   airclass.bat start
    ```
 
 5. **브라우저에서 접속**
    - 선생님: `http://서버IP:5173/teacher`
    - 학생: `http://서버IP:5173/student`
 
-### macOS 사용자
+### macOS / Linux 사용자
 
-1. **Docker Desktop 설치**
-   - https://www.docker.com/products/docker-desktop 에서 다운로드
-   - Apple Silicon (M1/M2/M3) 또는 Intel 버전 확인 후 설치
+1. **필수 요구사항**
+   - **macOS**: Docker Desktop 설치 (https://www.docker.com/products/docker-desktop)
+     - Apple Silicon (M1/M2/M3) 또는 Intel 버전 확인
+   - **Linux (Ubuntu)**: Docker 설치
+     ```bash
+     sudo apt update
+     sudo apt install -y docker.io docker-compose
+     sudo systemctl start docker
+     sudo usermod -aG docker $USER
+     # 로그아웃 후 다시 로그인
+     ```
 
 2. **AIRClass 다운로드**
    ```bash
@@ -79,47 +87,25 @@ AIRClass는 교사들이 쉽게 사용할 수 있는 실시간 화면 공유 플
 
 3. **초기 설정**
    ```bash
-   ./setup.sh
+   ./airclass.sh install
+   # 또는
+   make install
    ```
-   - 서버 IP 주소 입력 (터미널에서 `ifconfig | grep "inet "` 입력하여 확인)
+   - 서버 IP 주소 입력
+     - **macOS**: `ifconfig | grep "inet "`
+     - **Linux**: `ip addr show` 또는 `ifconfig`
    - 클래스 비밀번호 입력
 
 4. **서버 시작**
    ```bash
-   ./start.sh
+   ./airclass.sh start
+   # 또는
+   make start
    ```
 
 5. **브라우저에서 접속**
    - 선생님: `http://서버IP:5173/teacher`
    - 학생: `http://서버IP:5173/student`
-
-### Linux (Ubuntu) 사용자
-
-1. **Docker 설치**
-   ```bash
-   sudo apt update
-   sudo apt install -y docker.io docker-compose
-   sudo systemctl start docker
-   sudo usermod -aG docker $USER
-   # 로그아웃 후 다시 로그인
-   ```
-
-2. **AIRClass 다운로드**
-   ```bash
-   cd ~
-   git clone https://github.com/your-repo/AirClass.git
-   cd AirClass
-   ```
-
-3. **초기 설정**
-   ```bash
-   ./setup.sh
-   ```
-
-4. **서버 시작**
-   ```bash
-   ./start.sh
-   ```
 
 📖 **자세한 설치 방법**: [설치 가이드](docs/INSTALL_GUIDE.md)
 
@@ -207,27 +193,82 @@ AIRClass는 교사들이 쉽게 사용할 수 있는 실시간 화면 공유 플
 
 ## 📚 주요 명령어
 
-### Windows
+### 통합 CLI (권장)
+
+**Windows**:
 ```cmd
-setup.bat      # 초기 설정 (IP 주소, 비밀번호 입력)
-start.bat      # 서버 시작
-stop.bat       # 서버 중지
-logs.bat       # 로그 확인
+airclass.bat <command>
+
+주요 명령어:
+  airclass.bat install    # 초기 설치 및 설정
+  airclass.bat start      # 서버 시작
+  airclass.bat stop       # 서버 중지
+  airclass.bat restart    # 서버 재시작
+  airclass.bat logs       # 로그 확인
+  airclass.bat status     # 서버 상태 확인
+  airclass.bat clean      # 임시 파일 정리
+  airclass.bat help       # 도움말
 ```
 
-### macOS / Linux
+**macOS / Linux**:
 ```bash
-./setup.sh     # 초기 설정
-./start.sh     # 서버 시작
-./stop.sh      # 서버 중지
-./logs.sh      # 로그 확인
+./airclass.sh <command>
+
+주요 명령어:
+  ./airclass.sh install   # 초기 설치 및 설정
+  ./airclass.sh start     # 서버 시작
+  ./airclass.sh stop      # 서버 중지
+  ./airclass.sh restart   # 서버 재시작
+  ./airclass.sh logs      # 로그 확인
+  ./airclass.sh status    # 서버 상태 확인
+  ./airclass.sh test      # 테스트 실행
+  ./airclass.sh clean     # 임시 파일 정리
+  ./airclass.sh help      # 도움말
+```
+
+### Makefile (macOS / Linux 전용)
+```bash
+make <command>
+
+주요 명령어:
+  make install   # 초기 설치 및 설정
+  make start     # 서버 시작
+  make stop      # 서버 중지
+  make logs      # 로그 확인
+  make status    # 서버 상태 확인
+  make test      # 테스트 실행
+  make clean     # 임시 파일 정리
+  make help      # 도움말
+```
+
+### 직접 스크립트 호출 (고급 사용자)
+```bash
+# Windows
+scripts\start.bat
+scripts\stop.bat
+scripts\install\setup.bat
+
+# macOS / Linux
+bash scripts/start.sh
+bash scripts/stop.sh
+bash scripts/install/setup.sh
 ```
 
 ---
 
 ## 🔧 설정 변경
 
-`.env` 파일을 직접 수정하거나 `setup.bat` (또는 `./setup.sh`)를 다시 실행하세요.
+`.env` 파일을 직접 수정하거나 설치 명령을 다시 실행하세요:
+
+```bash
+# Windows
+airclass.bat install
+
+# macOS / Linux
+./airclass.sh install
+# 또는
+make install
+```
 
 **주요 설정 항목**:
 - `SERVER_IP` - 서버 IP 주소 (학생들이 접속할 주소)
@@ -272,17 +313,36 @@ http://서버IP:8000/cluster/nodes
 ### 서버가 시작되지 않아요
 1. Docker Desktop이 실행 중인지 확인
 2. `docker --version` 명령어로 Docker 설치 확인
-3. 포트가 이미 사용 중이면 `stop.bat` (또는 `./stop.sh`) 실행 후 재시도
+3. 포트가 이미 사용 중이면 중지 후 재시도
+   ```bash
+   # Windows
+   airclass.bat stop
+   airclass.bat start
+
+   # macOS / Linux
+   ./airclass.sh stop
+   ./airclass.sh start
+   ```
 
 ### 학생들이 접속이 안 돼요
-1. 서버 IP 주소가 올바른지 확인 (`ipconfig` 또는 `ifconfig`)
+1. 서버 IP 주소가 올바른지 확인
+   - **Windows**: `ipconfig`
+   - **macOS**: `ifconfig | grep "inet "`
+   - **Linux**: `ip addr show`
 2. 같은 Wi-Fi 네트워크에 연결되어 있는지 확인
 3. 방화벽 설정 확인 (포트 5173, 8000, 8889-8892, 8189-8192 허용 필요)
 
 ### 서브 노드가 연결되지 않아요
 1. 메인 노드가 실행 중인지 확인
 2. 클러스터 비밀번호가 메인과 서브가 동일한지 확인
-3. 로그 확인: `logs.bat` (또는 `./logs.sh`)
+3. 로그 확인
+   ```bash
+   # Windows
+   airclass.bat logs
+
+   # macOS / Linux
+   ./airclass.sh logs
+   ```
 4. 에러 메시지에 "Authentication failed" 있으면 비밀번호 불일치
 
 ### 영상이 끊겨요
@@ -298,29 +358,53 @@ http://서버IP:8000/cluster/nodes
 
 ```
 AirClass/
-├── start.bat / start.sh        # 서버 시작 스크립트
-├── stop.bat / stop.sh          # 서버 중지 스크립트
-├── setup.bat / setup.sh        # 초기 설정 마법사
-├── logs.bat / logs.sh          # 로그 확인
+├── README.md                   # 메인 문서
+├── LICENSE
 │
-├── .env                        # 설정 파일 (자동 생성)
+├── airclass.sh, airclass.bat   # 통합 CLI (크로스 플랫폼)
+├── Makefile                    # Unix 사용자용
+│
 ├── docker-compose.yml          # Docker 구성
+├── .env, .env.example          # 설정 파일
 │
 ├── backend/                    # 백엔드 서버
 │   ├── main.py                 # FastAPI 서버
 │   ├── cluster.py              # 클러스터 관리 및 인증
-│   └── mediamtx-main.yml       # 스트리밍 서버 설정
+│   ├── cache.py                # Redis/InMemory 캐시
+│   ├── gemini_service.py       # Gemini AI 통합
+│   ├── teacher_ai_keys.py      # 교사 API 키 관리
+│   ├── database.py             # MongoDB 연동
+│   ├── recording.py            # 녹화 시스템
+│   ├── vod_storage.py          # VOD 저장소
+│   └── routers/                # API 라우터
+│       ├── ai_analysis.py      # AI 분석 API
+│       └── ...
 │
-├── frontend/                   # 프론트엔드
+├── frontend/                   # 프론트엔드 (Svelte)
 │   └── src/
 │       ├── pages/
-│       │   ├── Teacher.svelte  # 선생님 페이지
+│       │   ├── Teacher.svelte  # 선생님 페이지 (AI UI 포함)
 │       │   └── Student.svelte  # 학생 페이지
 │       └── ...
 │
-└── docs/                       # 문서
-    ├── INSTALL_GUIDE.md        # 설치 가이드
-    └── ...
+├── scripts/                    # 실행 스크립트
+│   ├── start.sh, stop.sh       # 서버 시작/중지
+│   ├── logs.sh                 # 로그 확인
+│   ├── install/                # 설치 스크립트
+│   │   ├── setup.sh, setup.bat
+│   │   └── install-*.sh
+│   ├── dev/                    # 개발 도구
+│   │   ├── start-dev.sh
+│   │   └── status.sh
+│   └── tests/                  # 테스트 스크립트
+│
+├── docs/                       # 문서
+│   ├── INSTALL_GUIDE.md
+│   ├── DEPLOYMENT.md
+│   ├── CHANGELOG.md
+│   └── ...
+│
+└── android/, gui/, dashboard/  # 기타 구성요소
 ```
 
 ---
