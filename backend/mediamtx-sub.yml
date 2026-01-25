@@ -1,0 +1,71 @@
+# MediaMTX Configuration for Sub Nodes
+# Sub 노드: Main의 RTMP 스트림을 받아서 학생들에게 WebRTC로 배포
+
+# API
+api: yes
+apiAddress: :9997
+
+# Logging
+logLevel: info
+logFile: /tmp/mediamtx-sub.log
+
+# Environment variables
+pathDefaults:
+  source: rtmp://localhost/live/relay
+  sourceOnDemand: no
+
+# Paths (스트림 경로 정의)
+paths:
+  # Main 노드로부터의 스트림 수신
+  relay:
+    # Main RTMP 스트림을 로컬 RTMP로 중계
+    source: rtmp://main/live/stream
+    sourceOnDemand: no
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+    
+    # WebRTC 활성화 (학생들이 WHEP로 시청)
+    webrtcDisable: no
+    rtmpDisable: no
+    hlsDisable: no
+    dashDisable: no
+    
+    # HLS 설정 (대체 재생)
+    hlsSegmentCount: 3
+    hlsSegmentDuration: 4s
+    
+    # DASH 설정 (대체 재생)
+    dashSegmentCount: 6
+    dashSegmentDuration: 4s
+
+  # 헬스 체크용 테스트 스트림
+  test:
+    source: testsrc=s=320x240:d=10:r=10/1,aevalsrc=-2|channel_layout=stereo:s=44100:d=10[v][a]
+    sourceOnDemand: no
+
+# WebRTC 설정
+webrtcDisable: no
+webrtcAddress: :8889
+webrtcEncryption: "no"  # 개발 환경
+webrtcICEServersCandidates: []
+
+# RTMP 수신 (Main으로부터)
+rtmpDisable: no
+rtmpAddress: :1935
+
+# HLS 서빙
+hlsDisable: no
+hlsAddress: :8888
+hlsEncryption: "no"
+
+# DASH 서빙
+dashDisable: no
+dashAddress: :8890
+dashEncryption: "no"
+
+# HTTP 기본 인증 (선택)
+# httpAllowOrigin: "*"
+
+# 메모리 사용 최적화
+# maxClientReadBufferSize: 2097152
+# maxClientWriteBufferSize: 2097152

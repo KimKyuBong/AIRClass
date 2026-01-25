@@ -46,8 +46,11 @@ echo "📡 Starting MediaMTX..."
 if [ "$MODE" = "main" ]; then
     echo "   Using Main configuration (RTMP Proxy enabled)"
     ./mediamtx mediamtx-main.yml &
+elif [ "$MODE" = "sub" ]; then
+    echo "   Using Sub configuration (Stream Relay enabled)"
+    ./mediamtx mediamtx-sub.yml &
 else
-    echo "   Using Sub configuration (Normal mode)"
+    echo "   Using Standard configuration"
     ./mediamtx mediamtx.yml &
 fi
 
