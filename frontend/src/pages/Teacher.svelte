@@ -1,5 +1,6 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
+  import { slide } from 'svelte/transition';
   
   let ws = null;
   let videoElement = null;
@@ -28,8 +29,22 @@
   let streamSource = 'android'; // 'android' | 'pc'
   let isSourceSwitching = false;
 
+  // Gemini AI State
+  let geminiStatus = { enabled: false, env_fallback_available: false };
+  let geminiKeyInput = '';
+  let geminiTestPrompt = '';
+  let geminiTestResponse = '';
+  let isGeminiLoading = false;
+  let geminiError = '';
+  let aiEnabled = false;
+  let showSettings = false;
+  let geminiNotice = '';
+
   onMount(async () => {
     console.log('[Teacher] Component mounted');
+    
+    // Gemini Status Check
+    fetchGeminiStatus();
     
     // 전역 에러 핸들러 추가 (콘솔 못 보는 환경용)
     window.onerror = function(msg, url, line, col, error) {
@@ -604,6 +619,87 @@
       console.error('[Teacher] Error fetching viewers:', error);
     }
   }
+
+  // Gemini API Functions
+  async function fetchGeminiStatus() {
+    try {
+      const res = await fetch(`/api/ai/keys/gemini/status?teacher_id=Teacher`);
+      if (res.ok) {
+        const data = await res.json();
+        geminiStatus = {
+          enabled: !!data.enabled,
+          env_fallback_available: !!data.env_fallback_available
+        };
+        if (geminiStatus.enabled || geminiStatus.env_fallback_available) {
+          aiEnabled = true;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch Gemini status', e);
+    }
+  }
+
+  async function saveGeminiKey() {
+    if (!geminiKeyInput.trim()) return;
+    isGeminiLoading = true;
+    geminiError = '';
+    geminiNotice = '';
+    try {
+      // Note: In production, send via body. Using query params as requested.
+      const res = await fetch(`/api/ai/keys/gemini?teacher_id=Teacher&api_key=${encodeURIComponent(geminiKeyInput)}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error(await res.text());
+      geminiKeyInput = ''; // Clear input
+      await fetchGeminiStatus();
+      geminiNotice = "✅ 키가 안전하게 저장되었습니다.";
+      showSettings = false;
+    } catch (e) {
+      geminiError = e.message;
+    } finally {
+      isGeminiLoading = false;
+    }
+  }
+
+  async function deleteGeminiKey() {
+    if (!confirm('Gemini 키를 삭제하시겠습니까?')) return;
+    isGeminiLoading = true;
+    geminiError = '';
+    geminiNotice = '';
+    try {
+      const res = await fetch(`/api/ai/keys/gemini?teacher_id=Teacher`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await fetchGeminiStatus();
+      geminiNotice = "🗑️ 키가 삭제되었습니다.";
+      geminiTestResponse = '';
+    } catch (e) {
+      geminiError = e.message;
+    } finally {
+      isGeminiLoading = false;
+    }
+  }
+
+  async function testGemini() {
+    if (!geminiTestPrompt.trim()) return;
+    isGeminiLoading = true;
+    geminiError = '';
+    geminiTestResponse = '';
+    geminiNotice = '';
+    try {
+      const res = await fetch(`/api/ai/gemini/generate?teacher_id=Teacher&model=gemini-1.5-flash&prompt=${encodeURIComponent(geminiTestPrompt)}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      geminiTestResponse = data.text;
+    } catch (e) {
+      geminiError = e.message;
+    } finally {
+      isGeminiLoading = false;
+    }
+  }
 </script>
 
 <div class="min-h-screen bg-gray-50">
@@ -781,9 +877,145 @@
         {/if}
       </div>
 
-      <!-- Chat Panel -->
-      <div class="lg:col-span-1">
-        <div class="bg-white rounded-lg shadow p-4 h-[calc(100vh-200px)] flex flex-col">
+      <div class="lg:col-span-1 flex flex-col gap-6">
+        
+        <div class="bg-white rounded-lg shadow p-4 border border-blue-100 transition-all duration-300">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+              ✨ Gemini AI
+            </h2>
+            <div class="flex items-center gap-3">
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" bind:checked={aiEnabled} class="sr-only peer">
+                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <span class="ml-2 text-sm font-medium text-gray-600">{aiEnabled ? 'ON' : 'OFF'}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Status Bar -->
+          <div class="flex items-center gap-2 mb-4">
+             {#if geminiStatus.enabled}
+                <span class="text-xs px-2.5 py-0.5 bg-green-100 text-green-700 rounded-full border border-green-200 font-medium">Active</span>
+              {:else if geminiStatus.env_fallback_available}
+                <span class="text-xs px-2.5 py-0.5 bg-blue-100 text-blue-700 rounded-full border border-blue-200 font-medium">System Key</span>
+              {:else}
+                <span class="text-xs px-2.5 py-0.5 bg-gray-100 text-gray-600 rounded-full border border-gray-200 font-medium">Inactive</span>
+              {/if}
+              
+              <button 
+                on:click={fetchGeminiStatus} 
+                class="p-1 hover:bg-gray-100 rounded-full text-gray-500 transition-colors"
+                title="상태 새로고침"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+          </div>
+
+          {#if aiEnabled}
+             <!-- Settings Section -->
+             <div class="mb-4 border border-gray-200 rounded-lg overflow-hidden">
+                <button 
+                  on:click={() => showSettings = !showSettings}
+                  class="w-full flex justify-between items-center px-4 py-2 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                >
+                  <span>⚙️ 설정 (API Key)</span>
+                  <span class="text-xs text-gray-500">{showSettings ? '▲' : '▼'}</span>
+                </button>
+                
+                {#if showSettings}
+                  <div transition:slide class="p-4 bg-white border-t border-gray-200">
+                    <div class="flex gap-2">
+                      <input 
+                        type="password" 
+                        bind:value={geminiKeyInput} 
+                        placeholder="Gemini API Key 입력"
+                        class="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                      <button 
+                        on:click={saveGeminiKey}
+                        disabled={isGeminiLoading || !geminiKeyInput}
+                        class="px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        저장
+                      </button>
+                    </div>
+                    
+                    {#if geminiStatus.enabled}
+                      <div class="mt-2 flex justify-end">
+                         <button 
+                           on:click={deleteGeminiKey}
+                           disabled={isGeminiLoading}
+                           class="text-xs text-red-600 hover:text-red-800 underline decoration-red-300"
+                         >
+                           등록된 키 삭제하기
+                         </button>
+                      </div>
+                    {/if}
+
+                    <p class="text-[10px] text-gray-400 mt-2 flex items-center gap-1">
+                      <span class="inline-block w-1 h-1 bg-gray-400 rounded-full"></span>
+                      teacher_id는 현재 "Teacher"로 고정됩니다.
+                    </p>
+                  </div>
+                {/if}
+             </div>
+
+             <!-- Test Prompt Section -->
+             <div>
+               <div class="relative">
+                 <input  
+                   type="text" 
+                   bind:value={geminiTestPrompt} 
+                   placeholder="AI에게 무엇이든 물어보세요..."
+                   class="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                   on:keydown={(e) => e.key === 'Enter' && testGemini()}
+                 />
+                 <button 
+                   on:click={testGemini}
+                   disabled={isGeminiLoading || !geminiTestPrompt}
+                   class="absolute right-2 top-2 bottom-2 px-3 bg-purple-100 text-purple-700 rounded-md text-sm font-medium hover:bg-purple-200 disabled:opacity-50 transition-colors"
+                 >
+                   🚀
+                 </button>
+               </div>
+               
+               {#if isGeminiLoading}
+                 <div class="mt-3 text-xs text-purple-600 flex items-center gap-2 animate-pulse">
+                   <div class="w-2 h-2 bg-purple-600 rounded-full"></div>
+                   Gemini가 답변을 생성중입니다...
+                 </div>
+               {/if}
+
+               {#if geminiNotice}
+                 <div class="mt-3 p-3 bg-green-50 border border-green-100 text-green-700 text-xs rounded-lg flex items-center gap-2" transition:slide>
+                    <span>ℹ️</span> {geminiNotice}
+                 </div>
+               {/if}
+               
+               {#if geminiError}
+                 <div class="mt-3 p-3 bg-red-50 border border-red-100 text-red-600 text-xs rounded-lg break-words flex items-center gap-2" transition:slide>
+                   <span>⚠️</span> {geminiError}
+                 </div>
+               {/if}
+               
+               {#if geminiTestResponse}
+                 <div class="mt-3 p-4 bg-purple-50 border border-purple-100 rounded-lg text-sm text-gray-800 whitespace-pre-wrap max-h-60 overflow-y-auto shadow-inner text-xs leading-relaxed" transition:slide>
+                   {geminiTestResponse}
+                 </div>
+               {/if}
+             </div>
+          {:else}
+             <div class="text-center py-6 bg-gray-50 rounded-lg border border-gray-100 border-dashed">
+                <p class="text-gray-400 text-sm">AI 기능을 사용하려면 상단 스위치를 켜주세요.</p>
+             </div>
+          {/if}
+        </div>
+
+        <!-- Chat Panel -->
+        <div class="bg-white rounded-lg shadow p-4 flex-1 flex flex-col min-h-[400px]">
           <h2 class="text-lg font-semibold mb-4 text-gray-800">💬 실시간 채팅</h2>
           
           <!-- Messages -->

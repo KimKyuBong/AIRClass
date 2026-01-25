@@ -340,6 +340,22 @@ async def startup_event():
     start_mediamtx()
     await init_cluster_mode()
 
+    try:
+        from cache import init_cache
+
+        await init_cache()
+        logger.info("✅ Cache initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Cache initialization failed: {e}")
+
+    try:
+        from database import init_database_manager
+
+        await init_database_manager()
+        logger.info("✅ DatabaseManager initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ DatabaseManager initialization failed: {e}")
+
     # Initialize recording and VOD systems
     try:
         from recording import init_recording_manager

@@ -35,6 +35,13 @@ python main.py
 - 웹 뷰어: `http://localhost:8000/viewer`
 - API 문서: `http://localhost:8000/docs`
 
+## 간단 부하 테스트 (AI)
+
+```bash
+# /api/ai/health 엔드포인트를 병렬로 호출합니다
+python load_test_ai.py --base-url http://localhost:8000 --concurrency 20 --requests 200
+```
+
 ## 웹 뷰어 사용법
 
 ### 접속

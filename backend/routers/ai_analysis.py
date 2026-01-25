@@ -3,7 +3,9 @@ AIRClass AI Analysis API
 AI 기반 분석 및 피드백 API 엔드포인트
 """
 
+import hashlib
 import logging
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, Query, File, UploadFile
 from fastapi.responses import JSONResponse
 from typing import Optional, List, Dict
@@ -12,6 +14,16 @@ from datetime import datetime
 from ai_vision import get_vision_analyzer
 from ai_nlp import get_nlp_analyzer
 from ai_feedback import get_feedback_generator
+from cache import get_cache
+from database import get_database_manager
+from gemini_service import GeminiService
+from teacher_ai_keys import (
+    delete_teacher_gemini_key,
+    get_env_gemini_key,
+    get_teacher_gemini_key,
+    has_teacher_gemini_key,
+    upsert_teacher_gemini_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +61,13 @@ def get_feedback():
     return generator
 
 
+def get_db():
+    dbm = get_database_manager()
+    if not dbm or not dbm.db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    return dbm.db
+
+
 # ============================================
 # Vision Analysis Endpoints
 # ============================================
@@ -69,20 +88,42 @@ async def analyze_screenshot(
         ContentAnalysis: 분석 결과
     """
     try:
+        cache = get_cache()
+        cache_key = None
+        if cache:
+            try:
+                p = Path(screenshot_path)
+                st = p.stat()
+                cache_key = (
+                    f"airclass:cache:vision:{session_id}:"
+                    f"{p.resolve().as_posix()}:{st.st_mtime_ns}:{st.st_size}"
+                )
+                cached = await cache.get_json(cache_key)
+                if isinstance(cached, dict):
+                    return JSONResponse(cached)
+            except Exception:
+                cache_key = None
+
         analysis = vision.analyze_screenshot(session_id, screenshot_path)
-        return JSONResponse(
-            {
-                "analysis_id": analysis.analysis_id,
-                "session_id": analysis.session_id,
-                "content_type": analysis.content_type,
-                "topic": analysis.content_topic,
-                "complexity_score": analysis.complexity_score,
-                "engagement_potential": analysis.engagement_potential,
-                "scene_description": analysis.scene_description,
-                "recommendations": analysis.recommendations,
-                "timestamp": analysis.timestamp,
-            }
-        )
+        payload = {
+            "analysis_id": analysis.analysis_id,
+            "session_id": analysis.session_id,
+            "content_type": analysis.content_type,
+            "topic": analysis.content_topic,
+            "complexity_score": analysis.complexity_score,
+            "engagement_potential": analysis.engagement_potential,
+            "scene_description": analysis.scene_description,
+            "recommendations": analysis.recommendations,
+            "timestamp": analysis.timestamp,
+        }
+
+        if cache and cache_key:
+            try:
+                await cache.set_json(cache_key, payload, ttl_seconds=86400)
+            except Exception:
+                pass
+
+        return JSONResponse(payload)
     except Exception as e:
         logger.error(f"❌ Failed to analyze screenshot: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -169,6 +210,20 @@ async def analyze_message(
         ChatMessage: 분석된 메시지
     """
     try:
+        cache = get_cache()
+        cache_key = None
+        if cache:
+            try:
+                content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                cache_key = (
+                    f"airclass:cache:nlp:{session_id}:{message_id}:{content_hash}"
+                )
+                cached = await cache.get_json(cache_key)
+                if isinstance(cached, dict):
+                    return JSONResponse(cached)
+            except Exception:
+                cache_key = None
+
         message = nlp.analyze_message(
             session_id=session_id,
             message_id=message_id,
@@ -177,20 +232,26 @@ async def analyze_message(
             content=content,
         )
 
-        return JSONResponse(
-            {
-                "message_id": message.message_id,
-                "sentiment": message.sentiment,
-                "sentiment_score": message.sentiment_score,
-                "intent": message.intent,
-                "intent_confidence": message.intent_confidence,
-                "keywords": message.keywords,
-                "learning_indicator": message.learning_indicator,
-                "topic_relevance": message.topic_relevance,
-                "response_required": message.response_required,
-                "quality_score": message.quality_score,
-            }
-        )
+        payload = {
+            "message_id": message.message_id,
+            "sentiment": message.sentiment,
+            "sentiment_score": message.sentiment_score,
+            "intent": message.intent,
+            "intent_confidence": message.intent_confidence,
+            "keywords": message.keywords,
+            "learning_indicator": message.learning_indicator,
+            "topic_relevance": message.topic_relevance,
+            "response_required": message.response_required,
+            "quality_score": message.quality_score,
+        }
+
+        if cache and cache_key:
+            try:
+                await cache.set_json(cache_key, payload, ttl_seconds=3600)
+            except Exception:
+                pass
+
+        return JSONResponse(payload)
     except Exception as e:
         logger.error(f"❌ Failed to analyze message: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -300,6 +361,20 @@ async def generate_student_feedback(
         StudentFeedback: 생성된 피드백
     """
     try:
+        cache = get_cache()
+        cache_key = None
+        if cache:
+            try:
+                cache_key = (
+                    f"airclass:cache:feedback_student:{session_id}:"
+                    f"{student_id}:{topic}:{int(is_correct)}:{attempt_count}:{int(response_time)}"
+                )
+                cached = await cache.get_json(cache_key)
+                if isinstance(cached, dict):
+                    return JSONResponse(cached)
+            except Exception:
+                cache_key = None
+
         content_analysis = {"topic": topic}
         message_analysis = {"learning_indicator": None}
         performance_data = {
@@ -317,17 +392,23 @@ async def generate_student_feedback(
             performance_data=performance_data,
         )
 
-        return JSONResponse(
-            {
-                "feedback_id": student_feedback.feedback_id,
-                "type": student_feedback.feedback_type,
-                "message": student_feedback.message,
-                "explanation": student_feedback.explanation,
-                "examples": student_feedback.examples,
-                "resources": student_feedback.resources,
-                "priority": student_feedback.priority,
-            }
-        )
+        payload = {
+            "feedback_id": student_feedback.feedback_id,
+            "type": student_feedback.feedback_type,
+            "message": student_feedback.message,
+            "explanation": student_feedback.explanation,
+            "examples": student_feedback.examples,
+            "resources": student_feedback.resources,
+            "priority": student_feedback.priority,
+        }
+
+        if cache and cache_key:
+            try:
+                await cache.set_json(cache_key, payload, ttl_seconds=3600)
+            except Exception:
+                pass
+
+        return JSONResponse(payload)
     except Exception as e:
         logger.error(f"❌ Failed to generate student feedback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -437,15 +518,60 @@ async def comprehensive_analysis(
             "feedback": None,
         }
 
+        cache = get_cache()
+
         # 비전 분석
         if screenshot_path:
             try:
-                vision_result = vision.analyze_screenshot(session_id, screenshot_path)
-                result["vision_analysis"] = {
-                    "analysis_id": vision_result.analysis_id,
-                    "content_type": vision_result.content_type,
-                    "complexity_score": vision_result.complexity_score,
-                }
+                cached_vision = None
+                cache_key = None
+                if cache:
+                    try:
+                        p = Path(screenshot_path)
+                        st = p.stat()
+                        cache_key = (
+                            f"airclass:cache:vision:{session_id}:"
+                            f"{p.resolve().as_posix()}:{st.st_mtime_ns}:{st.st_size}"
+                        )
+                        cached_vision = await cache.get_json(cache_key)
+                    except Exception:
+                        cache_key = None
+
+                if isinstance(cached_vision, dict):
+                    result["vision_analysis"] = {
+                        "analysis_id": cached_vision.get("analysis_id"),
+                        "content_type": cached_vision.get("content_type"),
+                        "complexity_score": cached_vision.get("complexity_score"),
+                    }
+                else:
+                    vision_result = vision.analyze_screenshot(
+                        session_id, screenshot_path
+                    )
+                    result["vision_analysis"] = {
+                        "analysis_id": vision_result.analysis_id,
+                        "content_type": vision_result.content_type,
+                        "complexity_score": vision_result.complexity_score,
+                    }
+
+                    if cache and cache_key:
+                        try:
+                            await cache.set_json(
+                                cache_key,
+                                {
+                                    "analysis_id": vision_result.analysis_id,
+                                    "session_id": vision_result.session_id,
+                                    "content_type": vision_result.content_type,
+                                    "topic": vision_result.content_topic,
+                                    "complexity_score": vision_result.complexity_score,
+                                    "engagement_potential": vision_result.engagement_potential,
+                                    "scene_description": vision_result.scene_description,
+                                    "recommendations": vision_result.recommendations,
+                                    "timestamp": vision_result.timestamp,
+                                },
+                                ttl_seconds=86400,
+                            )
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning(f"⚠️ Vision analysis failed: {e}")
 
@@ -454,12 +580,43 @@ async def comprehensive_analysis(
             try:
                 nlp_results = []
                 for msg in messages[:5]:  # 최대 5개 메시지
+                    msg_session_id = msg.get("session_id", session_id)
+                    msg_message_id = msg.get("message_id", "unknown")
+                    msg_user_id = msg.get("user_id", "unknown")
+                    msg_user_type = msg.get("user_type", "student")
+                    msg_content = msg.get("content", "")
+
+                    cached_nlp = None
+                    cache_key = None
+                    if cache:
+                        try:
+                            content_hash = hashlib.sha256(
+                                msg_content.encode("utf-8")
+                            ).hexdigest()
+                            cache_key = (
+                                f"airclass:cache:nlp:{msg_session_id}:"
+                                f"{msg_message_id}:{content_hash}"
+                            )
+                            cached_nlp = await cache.get_json(cache_key)
+                        except Exception:
+                            cache_key = None
+
+                    if isinstance(cached_nlp, dict):
+                        nlp_results.append(
+                            {
+                                "message_id": cached_nlp.get("message_id"),
+                                "sentiment": cached_nlp.get("sentiment"),
+                                "intent": cached_nlp.get("intent"),
+                            }
+                        )
+                        continue
+
                     nlp_msg = nlp.analyze_message(
-                        session_id=msg.get("session_id", session_id),
-                        message_id=msg.get("message_id", "unknown"),
-                        user_id=msg.get("user_id", "unknown"),
-                        user_type=msg.get("user_type", "student"),
-                        content=msg.get("content", ""),
+                        session_id=msg_session_id,
+                        message_id=msg_message_id,
+                        user_id=msg_user_id,
+                        user_type=msg_user_type,
+                        content=msg_content,
                     )
                     nlp_results.append(
                         {
@@ -468,6 +625,27 @@ async def comprehensive_analysis(
                             "intent": nlp_msg.intent,
                         }
                     )
+
+                    if cache and cache_key:
+                        try:
+                            await cache.set_json(
+                                cache_key,
+                                {
+                                    "message_id": nlp_msg.message_id,
+                                    "sentiment": nlp_msg.sentiment,
+                                    "sentiment_score": nlp_msg.sentiment_score,
+                                    "intent": nlp_msg.intent,
+                                    "intent_confidence": nlp_msg.intent_confidence,
+                                    "keywords": nlp_msg.keywords,
+                                    "learning_indicator": nlp_msg.learning_indicator,
+                                    "topic_relevance": nlp_msg.topic_relevance,
+                                    "response_required": nlp_msg.response_required,
+                                    "quality_score": nlp_msg.quality_score,
+                                },
+                                ttl_seconds=3600,
+                            )
+                        except Exception:
+                            pass
                 result["nlp_analysis"] = nlp_results
             except Exception as e:
                 logger.warning(f"⚠️ NLP analysis failed: {e}")
@@ -499,3 +677,94 @@ async def health_check(
             },
         }
     )
+
+
+# ============================================
+# Teacher Gemini Key Management
+# ============================================
+
+
+@router.post("/keys/gemini")
+async def set_teacher_gemini_key(
+    teacher_id: str,
+    api_key: str,
+    db=Depends(get_db),
+):
+    """교사 Gemini API Key 저장(암호화)"""
+    try:
+        await upsert_teacher_gemini_key(db, teacher_id=teacher_id, api_key=api_key)
+        return JSONResponse(
+            {"teacher_id": teacher_id, "provider": "gemini", "enabled": True}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/keys/gemini/status")
+async def get_teacher_gemini_key_status(
+    teacher_id: str,
+    db=Depends(get_db),
+):
+    """교사 Gemini Key 활성화 여부(키 값은 반환하지 않음)"""
+    try:
+        enabled = await has_teacher_gemini_key(db, teacher_id=teacher_id)
+        env_enabled = bool(get_env_gemini_key())
+        return JSONResponse(
+            {
+                "teacher_id": teacher_id,
+                "provider": "gemini",
+                "enabled": enabled,
+                "env_fallback_available": env_enabled,
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/keys/gemini")
+async def delete_teacher_gemini_key_endpoint(
+    teacher_id: str,
+    db=Depends(get_db),
+):
+    """교사 Gemini API Key 삭제"""
+    try:
+        deleted = await delete_teacher_gemini_key(db, teacher_id=teacher_id)
+        return JSONResponse(
+            {"teacher_id": teacher_id, "provider": "gemini", "deleted": deleted}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Gemini (Test) Endpoint
+# ============================================
+
+
+@router.post("/gemini/generate")
+async def gemini_generate(
+    prompt: str,
+    teacher_id: Optional[str] = None,
+    model: str = "gemini-1.5-flash",
+    db=Depends(get_db),
+):
+    """테스트용 Gemini 호출(교사 키 -> env fallback)."""
+    api_key = None
+    if teacher_id:
+        api_key = await get_teacher_gemini_key(db, teacher_id=teacher_id)
+
+    if not api_key:
+        api_key = get_env_gemini_key()
+
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Gemini API key not configured (teacher key or GEMINI_API_KEY)",
+        )
+
+    try:
+        svc = GeminiService(api_key=api_key)
+        text = await svc.generate(model=model, prompt=prompt)
+        return JSONResponse({"model": model, "text": text})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

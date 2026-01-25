@@ -9,3 +9,6 @@ pillow>=10.0.0
 zeroconf>=0.131.0  # mDNS/Bonjour (선택사항, 없어도 다른 발견 방법 작동)
 pytest>=7.0.0
 pytest-asyncio>=0.23.0
+redis>=5.0.0
+motor>=3.3.0
+google-genai>=0.3.0

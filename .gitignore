@@ -75,3 +75,17 @@ frontend.pid
 
 # Dev server PIDs
 .pids/
+
+# Backups
+*.bak
+backups/
+
+# Cache
+.ruff_cache/
+.pytest_cache/
+*.pyc
+__pycache__/
+
+# Docker volumes
+backend/uploads/
+backend/recordings/

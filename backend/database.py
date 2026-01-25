@@ -4,7 +4,8 @@ MongoDB 연결 및 데이터 작업
 """
 
 import logging
-from motor.motor_asyncio import AsyncClient, AsyncDatabase
+from datetime import datetime
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional, List, Dict
 from models import *
 
@@ -16,8 +17,8 @@ class DatabaseManager:
 
     def __init__(self, mongodb_url: str = "mongodb://localhost:27017"):
         self.mongodb_url = mongodb_url
-        self.client: Optional[AsyncClient] = None
-        self.db: Optional[AsyncDatabase] = None
+        self.client: Optional[AsyncIOMotorClient] = None
+        self.db: Optional[AsyncIOMotorDatabase] = None
 
         logger.info(f"💾 DatabaseManager initialized")
         logger.info(f"   MongoDB URL: {mongodb_url}")
@@ -25,7 +26,7 @@ class DatabaseManager:
     async def init(self) -> bool:
         """MongoDB 연결 초기화"""
         try:
-            self.client = AsyncClient(self.mongodb_url)
+            self.client = AsyncIOMotorClient(self.mongodb_url)
             self.db = self.client["airclass"]
 
             # 연결 테스트
@@ -56,19 +57,32 @@ class DatabaseManager:
             await self.db.quizzes.create_index("created_at")
 
             # QuizResponse 인덱스
-            await self.db.quiz_responses.create_index([("session_id", 1), ("quiz_id", 1), ("student_id", 1)])
+            await self.db.quiz_responses.create_index(
+                [("session_id", 1), ("quiz_id", 1), ("student_id", 1)]
+            )
             await self.db.quiz_responses.create_index("responded_at")
 
             # Chat 인덱스
-            await self.db.chat_analytics.create_index([("session_id", 1), ("message_time", 1)])
+            await self.db.chat_analytics.create_index(
+                [("session_id", 1), ("message_time", 1)]
+            )
             await self.db.chat_analytics.create_index("student_id")
 
             # Engagement 인덱스
-            await self.db.student_engagement.create_index([("session_id", 1), ("student_id", 1)])
+            await self.db.student_engagement.create_index(
+                [("session_id", 1), ("student_id", 1)]
+            )
             await self.db.student_engagement.create_index("updated_at")
 
             # Screenshot 인덱스
-            await self.db.screenshot_analysis.create_index([("session_id", 1), ("screenshot_time", 1)])
+            await self.db.screenshot_analysis.create_index(
+                [("session_id", 1), ("screenshot_time", 1)]
+            )
+
+            # Teacher AI key 인덱스
+            await self.db.teacher_ai_keys.create_index(
+                [("teacher_id", 1), ("provider", 1)], unique=True
+            )
 
             logger.info("✅ Database indexes created")
 
@@ -93,7 +107,7 @@ class DatabaseManager:
         """세션 종료"""
         result = await self.db.sessions.update_one(
             {"session_id": session_id},
-            {"$set": {"status": "ended", "end_time": datetime.utcnow()}}
+            {"$set": {"status": "ended", "end_time": datetime.utcnow()}},
         )
         return result.modified_count > 0
 
@@ -114,8 +128,7 @@ class DatabaseManager:
     async def publish_quiz(self, quiz_id: str) -> bool:
         """퀴즈 발행"""
         result = await self.db.quizzes.update_one(
-            {"quiz_id": quiz_id},
-            {"$set": {"published_at": datetime.utcnow()}}
+            {"quiz_id": quiz_id}, {"$set": {"published_at": datetime.utcnow()}}
         )
         return result.modified_count > 0
 
@@ -169,9 +182,11 @@ class DatabaseManager:
 
     async def get_chat_messages(self, session_id: str) -> List[ChatMessage]:
         """세션의 채팅 메시지 조회"""
-        docs = await self.db.chat_analytics.find(
-            {"session_id": session_id}
-        ).sort("message_time", 1).to_list(None)
+        docs = (
+            await self.db.chat_analytics.find({"session_id": session_id})
+            .sort("message_time", 1)
+            .to_list(None)
+        )
         return [ChatMessage(**doc) for doc in docs]
 
     # ============================================
@@ -182,7 +197,10 @@ class DatabaseManager:
         """학생 참여도 업데이트"""
         try:
             result = await self.db.student_engagement.update_one(
-                {"session_id": engagement.session_id, "student_id": engagement.student_id},
+                {
+                    "session_id": engagement.session_id,
+                    "student_id": engagement.student_id,
+                },
                 {"$set": engagement.model_dump()},
                 upsert=True,
             )
@@ -211,11 +229,15 @@ class DatabaseManager:
             logger.error(f"❌ Failed to save screenshot analysis: {e}")
             return False
 
-    async def get_session_screenshots(self, session_id: str) -> List[ScreenshotAnalysis]:
+    async def get_session_screenshots(
+        self, session_id: str
+    ) -> List[ScreenshotAnalysis]:
         """세션의 스크린샷 분석 조회"""
-        docs = await self.db.screenshot_analysis.find(
-            {"session_id": session_id}
-        ).sort("screenshot_time", 1).to_list(None)
+        docs = (
+            await self.db.screenshot_analysis.find({"session_id": session_id})
+            .sort("screenshot_time", 1)
+            .to_list(None)
+        )
         return [ScreenshotAnalysis(**doc) for doc in docs]
 
     # ============================================
@@ -249,7 +271,9 @@ class DatabaseManager:
             logger.error(f"❌ Failed to save learning path: {e}")
             return False
 
-    async def get_student_learning_path(self, student_id: str) -> Optional[StudentLearningPath]:
+    async def get_student_learning_path(
+        self, student_id: str
+    ) -> Optional[StudentLearningPath]:
         """학생 학습 경로 조회"""
         doc = await self.db.student_learning_paths.find_one({"student_id": student_id})
         return StudentLearningPath(**doc) if doc else None
