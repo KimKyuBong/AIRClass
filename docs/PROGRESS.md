@@ -1,7 +1,7 @@
 # AIRClass 개발 진행현황
 
-**마지막 업데이트:** 2026-01-25  
-**진행률:** 10/18 작업 완료 (56%)
+**마지막 업데이트:** 2026-01-25 19:40  
+**진행률:** Phase 3-3 완료 (약 75% 완료)
 
 ## 📊 Phase별 진행 상황
 
@@ -101,48 +101,192 @@
   - 참여도 시각화 (레벨, 색상)
   - 추천사항 생성
 
-### ⏳ Phase 3: 녹화 + VOD (1.5주일) - 0% 진행
+### ✅ Phase 3: 녹화 + VOD + AI (1.5주일) - 90% 완료
 
-- Phase 3-1: Main 노드 자동 녹화
-- Phase 3-2: Sub 노드 VOD 플레이어
-- Phase 3-3: 저장소 관리
+#### Phase 3-1: 자동 녹화 시스템 ✓
+- `recording.py` (450줄) - RecordingManager 클래스
+  - ffmpeg 기반 RTMP → MP4 + HLS 녹화
+  - 10초 간격 자동 스크린샷 캡처
+  - 메타데이터 JSON 저장 (session_id, 시작/종료 시간)
+  - 비동기 녹화 작업 관리
+- `vod_storage.py` (280줄) - VODStorage 클래스
+  - 저장소 자동 정리 (7일 정책)
+  - 디스크 공간 모니터링
+  - 녹화 파일 메타데이터 관리
+- `routers/recording.py` (350줄)
+  - POST /api/recording/start
+  - POST /api/recording/stop
+  - GET /api/recording/status
+  - GET /api/recording/list
+- 18개 테스트 (100% 통과)
+- 커밋: `10a22e6`
 
-### ⏳ Phase 4: AI 학습 분석 (2주일) - 0% 진행
+#### Phase 3-2: AI 분석 시스템 ✓
+- `ai_vision.py` (380줄) - VisionAnalyzer 클래스
+  - 스크린샷 내용 자동 분석 (ContentAnalysis)
+  - 복잡도 점수, 주제 파악, 권장사항 생성
+  - PIL 이미지 처리
+- `ai_nlp.py` (420줄) - NLPAnalyzer 클래스
+  - 채팅 메시지 감정 분석 (긍정/부정/중립)
+  - 의도 파악 (질문/답변/코멘트/혼란)
+  - 키워드 추출 및 학습 지표 계산
+- `ai_feedback.py` (380줄) - FeedbackGenerator 클래스
+  - 학생별 맞춤 피드백 자동 생성
+  - 교사 피드백 생성 (세션 종합)
+  - 우선순위 자동 계산
+- `gemini_service.py` (120줄) - GeminiService 클래스
+  - Google Gemini API 통합
+  - 비동기 텍스트/이미지 생성
+  - 재시도 로직 (3회)
+- `teacher_ai_keys.py` (180줄)
+  - 교사별 Gemini API 키 암호화 저장 (Fernet)
+  - MongoDB teacher_ai_keys 컬렉션 관리
+  - 환경변수 fallback 지원
+- `cache.py` (250줄) - CacheManager 클래스
+  - Redis/InMemory 캐시 (자동 fallback)
+  - TTL 기반 만료 (vision 24h, nlp/feedback 1h)
+  - JSON 직렬화/역직렬화
+- `routers/ai_analysis.py` (750줄 → 수정)
+  - 비전/NLP/피드백 API에 캐싱 추가
+  - POST /api/ai/keys/gemini (키 저장)
+  - GET /api/ai/keys/gemini/status (키 상태)
+  - DELETE /api/ai/keys/gemini (키 삭제)
+  - POST /api/ai/gemini/generate (테스트용)
+- `database.py` 수정
+  - MongoDB 초기화 함수 추가
+  - teacher_ai_keys 컬렉션 인덱스 생성
+- `main.py` 수정
+  - cache 및 database 초기화 추가
+- 31개 테스트 (100% 통과)
+- 커밋: `08f670e`
 
-- Phase 4-1: 스크린샷 분석
-- Phase 4-2: 채팅 분석
-- Phase 4-3: 통합 분석 리포트
-- Phase 4-4: 개별 학습 경로
+#### Phase 3-3: 성능 최적화 (캐싱) ✓
+- Redis/InMemory 듀얼 캐시 시스템
+- AI API 결과 캐싱 (대폭 성능 향상)
+- `backend/load_test_ai.py` (부하 테스트 스크립트)
+- 커밋: `f285c60`
 
-### ⏳ Phase 5: 품질 + 배포 (1주일) - 0% 진행
+#### Phase 3-4: DB 쿼리 최적화 (계획) ⏳
+- [ ] 인덱스 최적화 (복합 인덱스 추가)
+- [ ] 프로젝션 최적화 (필요한 필드만 조회)
+- [ ] 집계 파이프라인 개선
+- [ ] 쿼리 성능 벤치마크
 
-- Phase 5-1: 타입 안정성
-- Phase 5-2: 테스트
-- Phase 5-3: 배포 자동화
+### ⏳ Phase 4: 배포 준비 (1주일) - 0% 진행
+
+#### Phase 4-1: Kubernetes 배포 ⏳
+- [ ] Helm Chart 작성
+- [ ] StatefulSet (Main 노드)
+- [ ] Deployment (Sub 노드)
+- [ ] Service, Ingress 설정
+- [ ] PersistentVolume (녹화 파일)
+
+#### Phase 4-2: Docker Compose 프로덕션 ⏳
+- [ ] 프로덕션 docker-compose.yml
+- [ ] 환경변수 관리 (.env.production)
+- [ ] 헬스체크 강화
+- [ ] 재시작 정책 최적화
+
+#### Phase 4-3: 모니터링 & 로깅 ⏳
+- [ ] Prometheus 메트릭 수집
+- [ ] Grafana 대시보드
+- [ ] 로그 집계 (ELK 스택 or Loki)
+- [ ] 알림 설정 (AlertManager)
+
+#### Phase 4-4: CI/CD ⏳
+- [ ] GitHub Actions 워크플로우
+- [ ] 자동 테스트 실행
+- [ ] Docker 이미지 빌드 및 푸시
+- [ ] 자동 배포 (스테이징/프로덕션)
+
+### ⏳ Phase 5: 고급 기능 (계획)
+
+#### Phase 5-1: 자동 노드 발견 ⏳
+- [ ] mDNS/Bonjour 서비스 발견
+- [ ] 동적 Sub 노드 등록
+- [ ] 네트워크 스캔 기능
+
+#### Phase 5-2: AI 기반 자동 스케일링 ⏳
+- [ ] 부하 기반 Sub 노드 자동 추가
+- [ ] 학생 수 예측 모델
+- [ ] 리소스 최적화
+
+#### Phase 5-3: 다중 언어 지원 ⏳
+- [ ] i18n 프레임워크 통합
+- [ ] 한국어/영어 UI
+- [ ] 다국어 AI 피드백
 
 ## 📁 생성된 파일 구조
 
 ```
 backend/
-├── recording.py           # Main 녹화 관리자 (300줄)
+├── main.py                # FastAPI 메인 (850줄)
+├── cluster.py             # 클러스터 관리 (450줄)
+├── config.py              # 설정 관리 (180줄)
+│
+├── # Phase 1: 아키텍처
+├── recording.py           # Main 녹화 관리자 (450줄)
+├── vod_storage.py         # VOD 저장소 관리 (280줄)
 ├── stream_relay.py        # Sub 스트림 중계 (250줄)
 ├── messaging.py           # Redis Pub/Sub 시스템 (350줄)
-├── models.py              # Pydantic 데이터 모델 (400줄)
-├── database.py            # MongoDB 비동기 관리자 (350줄)
-├── engagement.py          # 참여도 계산 엔진 (500줄) ✨ NEW
-├── engagement_listener.py # Engagement 이벤트 리스너 (200줄) ✨ NEW
-├── mediamtx-sub.yml       # Sub 노드 스트리밍 설정
-├── docker-entrypoint.sh   # 다중 노드 진입점 (업데이트)
-└── routers/
-    ├── quiz.py            # 퀴즈 API 엔드포인트 (205줄)
-    ├── engagement.py      # 참여도 추적 API (350줄) ✨ NEW
-    └── dashboard.py       # 교사 대시보드 API (450줄) ✨ NEW
+├── discovery.py           # 노드 자동 발견 (200줄)
+│
+├── # Phase 2: 학습 분석
+├── models.py              # Pydantic 데이터 모델 (520줄)
+├── database.py            # MongoDB 비동기 관리자 (480줄)
+├── engagement.py          # 참여도 계산 엔진 (500줄)
+├── engagement_listener.py # Engagement 이벤트 리스너 (200줄)
+│
+├── # Phase 3: AI + 성능
+├── ai_vision.py           # 비전 분석 (380줄)
+├── ai_nlp.py              # NLP 분석 (420줄)
+├── ai_feedback.py         # AI 피드백 생성 (380줄)
+├── gemini_service.py      # Gemini API 통합 (120줄)
+├── teacher_ai_keys.py     # 교사 키 관리 (암호화) (180줄)
+├── cache.py               # Redis/InMemory 캐시 (250줄)
+├── load_test_ai.py        # AI 부하 테스트 (170줄)
+│
+├── # 라우터
+├── routers/
+│   ├── quiz.py            # 퀴즈 API (250줄)
+│   ├── engagement.py      # 참여도 API (350줄)
+│   ├── dashboard.py       # 교사 대시보드 API (450줄)
+│   ├── recording.py       # 녹화 API (350줄)
+│   └── ai_analysis.py     # AI 분석 API (750줄)
+│
+├── # 테스트
+├── tests/
+│   ├── test_engagement.py        # 참여도 테스트 (52 tests)
+│   ├── test_recording.py         # 녹화 테스트 (18 tests)
+│   ├── test_ai_analysis.py       # AI 분석 테스트 (31 tests)
+│   └── test_teacher_ai_keys.py   # 교사 키 테스트 (암호화)
+│
+└── # 설정
+    ├── mediamtx-main.yml  # Main 노드 스트리밍 설정
+    ├── mediamtx-sub.yml   # Sub 노드 스트리밍 설정
+    └── docker-entrypoint.sh
 
 root/
-├── docker-compose.yml     # Main + Sub + Redis (업데이트)
-└── PROGRESS.md            # 이 파일
+├── README.md              # 메인 문서 (업데이트)
+├── airclass.sh, airclass.bat  # 통합 CLI
+├── Makefile               # Unix 빌드 도구
+├── docker-compose.yml     # Main + Sub + Redis + MongoDB
+│
+├── scripts/               # 실행 스크립트
+│   ├── install/           # 설치 스크립트
+│   ├── dev/               # 개발 도구
+│   └── tests/             # 테스트 스크립트 (13개)
+│
+└── docs/                  # 문서
+    ├── PROGRESS.md        # 이 파일
+    ├── CHANGELOG.md
+    ├── DEPLOYMENT.md
+    └── ...
 
-총 신규 코드: ~4,000줄 (이전 2,500줄 + 추가 1,500줄)
+총 코드량:
+- 백엔드: 7,159줄
+- 테스트: 2,832줄 (10개 파일, 101 tests)
+- 합계: 9,991줄
 ```
 
 ## 🎯 아키텍처 개요
@@ -207,26 +351,33 @@ root/
 
 ## 🚀 다음 우선순위
 
-1. **Phase 2-3: 참여도 추적** (높음)
-   - engagement.py 구현
-   - 활동 기록 및 점수 계산
-   - 교사가 학생 상태 실시간 파악
+1. **Phase 3-4: DB 쿼리 최적화** (높음) ⏳
+   - 복합 인덱스 추가 (session_id + timestamp)
+   - 프로젝션 최적화 (필요한 필드만 조회)
+   - 집계 파이프라인 개선
+   - 쿼리 성능 벤치마크
+   - Phase 3 100% 완료
 
-2. **Phase 2-4: 교사 대시보드** (높음)
-   - 실시간 대시보드 API
-   - 혼동도 감지 알림
-   - Phase 2 100% 달성
+2. **Phase 4-1: Kubernetes 배포** (높음) ⏳
+   - Helm Chart 작성
+   - StatefulSet (Main), Deployment (Sub)
+   - PersistentVolume (녹화 파일 저장)
+   - Service, Ingress 설정
 
-3. **Phase 3: 녹화 + VOD** (중간)
-   - 학생들이 놓친 부분 복습 가능
+3. **Phase 4-2: Docker Compose 프로덕션** (중간) ⏳
+   - 프로덕션 환경 설정
+   - 헬스체크 강화
+   - 재시작 정책 최적화
 
-4. **Phase 4: AI 학습 분석** (중간)
-   - 가장 높은 가치 제공
-   - GPT-4V 스크린샷 분석
-   - 자동 리포트 생성
+4. **Phase 4-3: 모니터링 & 로깅** (중간) ⏳
+   - Prometheus + Grafana 대시보드
+   - 로그 집계 (Loki)
+   - 알림 설정
 
-5. **Phase 5: 품질 + 배포** (낮음)
-   - 프로덕션 준비
+5. **Phase 5: 고급 기능** (낮음)
+   - mDNS 자동 노드 발견
+   - AI 기반 자동 스케일링
+   - 다중 언어 지원
 
 ## 📈 성과 지표
 
@@ -243,9 +394,22 @@ root/
 4. **Pydantic**: 타입 안정성
 5. **FFmpeg**: 프로덕션급 녹화
 
-## 📝 주요 진행 파일
+## 📝 주요 커밋 이력
 
-- 커밋 3개
-- 새 파일 9개
-- 수정 파일 3개
-- 총 2,500줄 신규 코드
+### Phase 1-2 완료
+- 커밋: `974504b` - Phase 2 완료 (한글 리포트)
+- 커밋: `f98e78d` - Engagement 테스트 52개 (100% 통과)
+
+### Phase 3-1 완료 (녹화/VOD)
+- 커밋: `10a22e6` - 자동 녹화 시스템 (1,755줄 + 18 테스트)
+
+### Phase 3-2 완료 (AI 분석)
+- 커밋: `08f670e` - AI 분석 시스템 (1,400줄 + 31 테스트)
+
+### Phase 3-3 완료 (성능 최적화)
+- 커밋: `f285c60` - Gemini 통합 + 캐싱 + 루트 정리
+- 커밋: `fc5fa1f` - 프로젝트 구조 재정리 + 통합 CLI
+
+**총 주요 커밋**: 6개  
+**총 신규 파일**: 19개 (backend) + 10개 (tests)  
+**총 코드량**: 9,991줄 (백엔드 7,159 + 테스트 2,832)
