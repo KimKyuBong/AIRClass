@@ -154,6 +154,14 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ VOD router import failed: {e}")
 
+try:
+    from routers.ai_analysis import router as ai_router
+
+    app.include_router(ai_router)
+    logger.info("✅ AI Analysis router included")
+except Exception as e:
+    logger.warning(f"⚠️ AI Analysis router import failed: {e}")
+
 mediamtx_process = None
 
 
@@ -348,6 +356,31 @@ async def startup_event():
         logger.info("✅ VODStorage initialized")
     except Exception as e:
         logger.warning(f"⚠️ VODStorage initialization failed: {e}")
+
+    # Initialize AI analysis modules
+    try:
+        from ai_vision import init_vision_analyzer
+
+        await init_vision_analyzer()
+        logger.info("✅ VisionAnalyzer initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ VisionAnalyzer initialization failed: {e}")
+
+    try:
+        from ai_nlp import init_nlp_analyzer
+
+        await init_nlp_analyzer()
+        logger.info("✅ NLPAnalyzer initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ NLPAnalyzer initialization failed: {e}")
+
+    try:
+        from ai_feedback import init_feedback_generator
+
+        await init_feedback_generator()
+        logger.info("✅ FeedbackGenerator initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ FeedbackGenerator initialization failed: {e}")
 
     # Print QR code for Android app connection
     local_ip = get_local_ip()
