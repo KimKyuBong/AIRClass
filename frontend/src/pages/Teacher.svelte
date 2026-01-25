@@ -21,33 +21,269 @@
   let nodeStats = {};
   let clusterMode = 'unknown';
 
+  let isBroadcasting = false;
+  let broadcastStream = null;
+  
+  // 스트림 소스 관리
+  let streamSource = 'android'; // 'android' | 'pc'
+  let isSourceSwitching = false;
+
   onMount(async () => {
     console.log('[Teacher] Component mounted');
+    
+    // 전역 에러 핸들러 추가 (콘솔 못 보는 환경용)
+    window.onerror = function(msg, url, line, col, error) {
+      alert(`💥 GLOBAL ERROR 💥\n\nMsg: ${msg}\nLine: ${line}:${col}\nError: ${error ? error.stack : 'N/A'}`);
+      return false;
+    };
+
     connectWebSocket();
+    // Default to viewer mode (Android stream)
+    streamSource = 'android';
     await fetchTokenAndInitWebRTC();
     startViewerPolling();
   });
 
-  onDestroy(() => {
+  // 버튼 클릭 핸들러 단순화
+  function handleBroadcastToggle() {
+    try {
+      if (isBroadcasting) {
+        stopBroadcast();
+      } else {
+        startBroadcast();
+      }
+    } catch (e) {
+      alert(`핸들러 실행 중 에러: ${e.message}`);
+    }
+  }
+
+  async function startBroadcast() {
+    try {
+      if (isBroadcasting) return;
+
+      // Check for secure context
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        throw new Error(
+          '브라우저가 화면 공유를 지원하지 않습니다.\n(원인: HTTPS가 아니거나 localhost가 아님)\n현재 주소: ' + window.location.href
+        );
+      }
+      
+      console.log('[Teacher] Starting broadcast...');
+      
+      // 1. Get Display Media first
+      try {
+        broadcastStream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 }
+          },
+          audio: true
+        });
+      } catch (e) {
+        if (e.name === 'NotAllowedError') {
+          // 사용자가 취소함 -> 조용히 리턴
+          console.log('User cancelled screen share');
+          return;
+        }
+        throw new Error(`화면 선택 실패: ${e.name} - ${e.message}`);
+      }
+      
+      // Handle user cancelling the picker
+      broadcastStream.getVideoTracks()[0].onended = () => {
+        console.log('[Teacher] User stopped screen share via browser UI');
+        stopBroadcast();
+      };
+      
+      // 2. Get Publish Token
+      console.log('[Teacher] Fetching publish token...');
+      let response;
+      try {
+        response = await fetch(
+          `/api/token?user_type=teacher&user_id=Teacher&action=publish`,
+          { method: 'POST' }
+        );
+      } catch (e) {
+        throw new Error(`토큰 요청 중 네트워크 오류 발생 (Mixed Content 또는 서버 다운?)\n${e.message}`);
+      }
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`토큰 발급 실패 (Status: ${response.status})\n서버 응답: ${errorText}`);
+      }
+      
+      const data = await response.json();
+      let whipUrl = data.webrtc_url;
+      
+      // Proxy를 타도록 상대 경로로 변환
+      let originalWhipUrl = whipUrl;
+      try {
+        const urlObj = new URL(whipUrl);
+        whipUrl = urlObj.pathname + urlObj.search;
+      } catch (e) {
+        console.warn('URL parsing failed, using original', e);
+      }
+      
+      // 3. Stop existing viewer PC if any
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      
+      // 4. Create Publisher PeerConnection
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
+      });
+      
+      // Add tracks
+      broadcastStream.getTracks().forEach(track => {
+        pc.addTrack(track, broadcastStream);
+      });
+      
+      if (videoElement) {
+        videoElement.srcObject = broadcastStream;
+        videoElement.muted = true;
+        videoElement.play().catch(e => console.error('Preview play failed', e));
+      }
+
+      // 5. Create Offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      // 6. WHIP Signaling
+      console.log(`[Teacher] Sending offer to WHIP endpoint: ${whipUrl}`);
+      let whipResponse;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 타임아웃
+
+        whipResponse = await fetch(whipUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: offer.sdp,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (e) {
+         if (e.name === 'AbortError') {
+            throw new Error(`방송 서버 연결 시간 초과 (10초).\n네트워크 상태를 확인하거나 서버 로그를 확인하세요.`);
+         }
+         throw new Error(`방송 서버(WHIP) 연결 실패.\n요청 URL: ${whipUrl}\n(원본: ${originalWhipUrl})\n에러: ${e.message}\n\n* HTTPS 접속 시 프록시 설정이 안되었거나 인증서 문제일 수 있습니다.`);
+      }
+      
+      if (!whipResponse.ok) {
+        const errText = await whipResponse.text();
+        throw new Error(`방송 시작 실패 (MediaMTX 오류)\nStatus: ${whipResponse.status}\n응답: ${errText}`);
+      }
+      
+      const answerSdp = await whipResponse.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      
+      isBroadcasting = true;
+      isVideoLoaded = true;
+      
+    } catch (error) {
+      console.error('[Teacher] Broadcast failed:', error);
+      stopBroadcast();
+      
+      // 사용자 요청대로 원본 에러 메시지와 스택 트레이스를 그대로 출력
+      const errorDump = [
+        `Message: ${error.message}`,
+        `Name: ${error.name}`,
+        `Stack: ${error.stack || 'N/A'}`,
+        // fetch 에러인 경우 추가 정보가 있을 수 있음
+        error.cause ? `Cause: ${JSON.stringify(error.cause)}` : ''
+      ].filter(Boolean).join('\n\n');
+
+      alert(`🚨 CRITICAL ERROR 🚨\n\n${errorDump}`);
+    }
+  }
+
+  function stopBroadcast() {
+    if (!isBroadcasting && !broadcastStream) return;
+    
+    console.log('[Teacher] Stopping broadcast...');
+    
+    // Stop tracks
+    if (broadcastStream) {
+      broadcastStream.getTracks().forEach(track => track.stop());
+      broadcastStream = null;
+    }
+    
+    // Close PC
     if (pc) {
       pc.close();
+      pc = null;
     }
-    if (ws) {
-      ws.close();
+    
+    if (videoElement) {
+      videoElement.srcObject = null;
     }
-    if (latencyMonitorInterval) {
-      clearInterval(latencyMonitorInterval);
+    
+    isBroadcasting = false;
+    isVideoLoaded = false;
+    
+    // Revert to Android viewer mode
+    console.log('[Teacher] Reverting to Android viewer mode...');
+    streamSource = 'android';
+    fetchTokenAndInitWebRTC();
+  }
+
+  // 스트림 소스 전환 함수
+  async function switchStreamSource(newSource) {
+    if (isSourceSwitching) return;
+    if (streamSource === newSource && !isBroadcasting) return;
+    
+    isSourceSwitching = true;
+    console.log(`[Teacher] Switching stream source from ${streamSource} to ${newSource}`);
+    
+    try {
+      // 기존 연결 정리
+      if (isBroadcasting) {
+        stopBroadcast();
+      } else if (pc) {
+        pc.close();
+        pc = null;
+      }
+      
+      if (videoElement) {
+        videoElement.srcObject = null;
+      }
+      
+      isVideoLoaded = false;
+      streamSource = newSource;
+      
+      // 새 소스로 연결
+      if (newSource === 'android') {
+        // Android 스트림 시청 모드
+        console.log('[Teacher] Switching to Android stream viewer mode');
+        await fetchTokenAndInitWebRTC();
+      } else if (newSource === 'pc') {
+        // PC 화면 공유 시작
+        console.log('[Teacher] Switching to PC broadcast mode');
+        await startBroadcast();
+      }
+    } catch (error) {
+      console.error('[Teacher] Error switching stream source:', error);
+      alert(`소스 전환 실패: ${error.message}`);
+      // 실패 시 Android로 복귀
+      streamSource = 'android';
+      await fetchTokenAndInitWebRTC();
+    } finally {
+      isSourceSwitching = false;
     }
-    if (viewerPollInterval) {
-      clearInterval(viewerPollInterval);
-    }
-  });
+  }
 
   async function fetchTokenAndInitWebRTC() {
+    if (isBroadcasting) return; // Don't interrupt broadcast
+
     try {
-      console.log('[Teacher] Fetching token...');
+      console.log('[Teacher] Fetching viewer token...');
+      // Use relative path for proxy support (HTTPS)
       const response = await fetch(
-        `http://${window.location.hostname}:8000/api/token?user_type=teacher&user_id=Teacher`,
+        `/api/token?user_type=teacher&user_id=Teacher&action=read`,
         { method: 'POST' }
       );
       
@@ -58,28 +294,29 @@
       const data = await response.json();
       webrtcUrl = data.webrtc_url;
       
+      // Proxy를 타도록 상대 경로로 변환 (HTTPS -> HTTP Mixed Content 방지)
+      try {
+        const urlObj = new URL(webrtcUrl);
+        webrtcUrl = urlObj.pathname + urlObj.search;
+        console.log('[Teacher] Converted WHEP URL to relative:', webrtcUrl);
+      } catch (e) {
+        console.warn('[Teacher] Failed to convert WHEP URL:', e);
+      }
+      
       console.log('[Teacher] Token received:', data);
-      console.log('[Teacher] WebRTC URL:', webrtcUrl);
       
       // Wait for DOM to update
       await tick();
-      console.log('[Teacher] DOM updated, videoElement:', videoElement);
       
-      // Configure video element for ultra-low latency
-      if (videoElement) {
-        configureVideoForLowLatency(videoElement);
-      }
-      
-      // Initialize WebRTC
-      console.log('[Teacher] Initializing WebRTC...');
+      // Initialize WebRTC as viewer
       initializeWebRTC(webrtcUrl);
       
     } catch (error) {
       console.error('[Teacher] Token error:', error);
-      // Retry after 3 seconds
-      setTimeout(fetchTokenAndInitWebRTC, 3000);
+      // Retry logic handled by caller or refresh
     }
   }
+
 
   // Configure video element for ultra-low latency
   function configureVideoForLowLatency(video) {
@@ -299,7 +536,8 @@
   }
 
   function connectWebSocket() {
-    ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/teacher`);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${window.location.host}/ws/teacher`);
     
     ws.onopen = () => {
       isConnected = true;
@@ -350,7 +588,7 @@
   
   async function fetchViewers() {
     try {
-      const response = await fetch(`http://${window.location.hostname}:8000/api/viewers`);
+      const response = await fetch(`/api/viewers`);
       if (response.ok) {
         const data = await response.json();
         viewerCount = data.total_viewers || 0;
@@ -382,6 +620,34 @@
         {/if}
       </div>
       <div class="flex items-center gap-4">
+        <!-- 스트림 소스 선택 -->
+        <div class="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
+          <button
+            on:click={() => switchStreamSource('android')}
+            disabled={isSourceSwitching}
+            class="px-3 py-1.5 rounded-md font-medium transition-all text-sm {streamSource === 'android' && !isBroadcasting ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'} {isSourceSwitching ? 'opacity-50 cursor-not-allowed' : ''}"
+          >
+            📱 Android 앱
+          </button>
+          <button
+            on:click={() => switchStreamSource('pc')}
+            disabled={isSourceSwitching}
+            class="px-3 py-1.5 rounded-md font-medium transition-all text-sm {streamSource === 'pc' || isBroadcasting ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'} {isSourceSwitching ? 'opacity-50 cursor-not-allowed' : ''}"
+          >
+            🖥️ PC 화면
+          </button>
+        </div>
+        
+        <!-- PC 화면 공유 중지 버튼 (PC 모드일 때만 표시) -->
+        {#if isBroadcasting}
+          <button
+            on:click={handleBroadcastToggle}
+            class="px-4 py-2 rounded-lg font-medium transition-colors text-sm bg-red-500 text-white hover:bg-red-600"
+          >
+            ⏹️ 공유 중지
+          </button>
+        {/if}
+        
         <div class="text-sm text-gray-600">
           실시간 시청자 {viewerCount}명
         </div>
@@ -397,7 +663,15 @@
       <!-- Screen Preview -->
       <div class="lg:col-span-2">
         <div class="bg-white rounded-lg shadow p-4">
-          <h2 class="text-lg font-semibold mb-4 text-gray-800">내 화면 미리보기 (WebRTC 초저지연)</h2>
+          <h2 class="text-lg font-semibold mb-4 text-gray-800 flex items-center gap-2">
+            {#if isBroadcasting}
+              <span class="text-red-600">🔴</span> PC 화면 송출 중 (WebRTC)
+            {:else if streamSource === 'android'}
+              <span class="text-blue-600">📱</span> Android 스트림 미리보기
+            {:else}
+              <span class="text-gray-600">🖥️</span> 스트림 미리보기
+            {/if}
+          </h2>
           <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative">
             <!-- svelte-ignore a11y-media-has-caption -->
             <video
@@ -413,9 +687,23 @@
             {#if !isVideoLoaded}
               <div class="absolute inset-0 flex items-center justify-center text-center text-gray-400 bg-gray-900 bg-opacity-90">
                 <div>
-                  <div class="text-4xl mb-2">📱</div>
-                  <p>Android 앱에서 화면 공유 시작</p>
-                  <p class="text-sm mt-2">WebRTC 연결 중...</p>
+                  {#if isSourceSwitching}
+                    <div class="text-4xl mb-2">⏳</div>
+                    <p>소스 전환 중...</p>
+                  {:else if streamSource === 'android'}
+                    <div class="text-4xl mb-2">📱</div>
+                    <p>Android 앱에서 화면 공유 시작</p>
+                    <p class="text-sm mt-4 text-gray-500">
+                      RTMP URL: rtmp://서버IP:1935/live/stream
+                    </p>
+                    <p class="text-xs mt-4 text-gray-500">
+                      또는 위의 "🖥️ PC 화면" 버튼을 눌러 PC 화면을 공유하세요
+                    </p>
+                  {:else if streamSource === 'pc'}
+                    <div class="text-4xl mb-2">🖥️</div>
+                    <p>PC 화면 공유 준비 중...</p>
+                    <p class="text-xs mt-4 text-gray-500">화면 선택 창이 나타납니다</p>
+                  {/if}
                 </div>
               </div>
             {/if}

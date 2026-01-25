@@ -305,13 +305,14 @@ async def shutdown_event():
 atexit.register(stop_mediamtx)
 
 
-def generate_stream_token(user_type: str, user_id: str) -> str:
+def generate_stream_token(user_type: str, user_id: str, action: str = "read") -> str:
     """
     스트림 접근 토큰 생성
 
     Args:
         user_type: 'teacher', 'student', 'monitor'
         user_id: 사용자 ID (학생 이름 등)
+        action: 'read' (default) or 'publish'
 
     Returns:
         JWT 토큰 문자열
@@ -322,7 +323,7 @@ def generate_stream_token(user_type: str, user_id: str) -> str:
         "user_id": user_id,
         "exp": expiration,
         "iat": datetime.utcnow(),
-        "action": "read",  # MediaMTX action
+        "action": action,  # MediaMTX action
         "path": "live/stream",  # MediaMTX path
     }
     token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
@@ -385,6 +386,35 @@ async def mediamtx_auth(request: dict):
     # Android 앱의 RTMP publish는 항상 허용
     if action == "publish" and protocol == "rtmp":
         print(f"[MediaMTX Auth] ✅ Allowing RTMP publish")
+        return {"status": "ok"}
+
+    # WebRTC publish (Teacher Screen Share) - WHIP
+    if action == "publish" and protocol == "webrtc":
+        # query에서 jwt 파라미터 추출
+        token = None
+        if "jwt=" in query:
+            # 첫 번째 jwt= 값만 추출 (중복 방지)
+            token = query.split("jwt=")[1].split("&")[0]
+            print(f"[MediaMTX Auth] Extracted JWT token for publish: {token[:50]}...")
+
+        if not token:
+            print(f"[MediaMTX Auth] ❌ WebRTC publish denied - no token")
+            raise HTTPException(status_code=401, detail="Token required")
+
+        # 토큰 검증
+        payload = verify_token(token)
+        if not payload:
+            print(f"[MediaMTX Auth] ❌ WebRTC publish denied - invalid token")
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+        # Teacher 권한 확인
+        if payload.get("user_type") != "teacher":
+            print(f"[MediaMTX Auth] ❌ WebRTC publish denied - not a teacher")
+            raise HTTPException(status_code=403, detail="Only teachers can publish")
+
+        print(
+            f"[MediaMTX Auth] ✅ Allowing WebRTC publish for teacher {payload.get('user_id')}"
+        )
         return {"status": "ok"}
 
     # Main 모드: 내부 프록시 스크립트의 RTMP read 허용 (localhost에서만)
@@ -666,7 +696,9 @@ async def get_cluster_nodes():
 
 
 @app.post("/api/token")
-async def create_token_cluster_aware(user_type: str, user_id: str):
+async def create_token_cluster_aware(
+    user_type: str, user_id: str, action: str = "read"
+):
     """
     스트림 접근 토큰 발급 (클러스터 지원)
 
@@ -681,7 +713,13 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
 
     # Teacher는 항상 Main 노드에 연결 (RTMP 스트리밍 소스이므로)
     # Student만 Sub 노드로 로드 밸런싱
-    if mode == "main" and not use_main_webrtc and user_type == "student":
+    # action이 'publish'인 경우(교사 화면 공유)도 Main으로 연결
+    if (
+        mode == "main"
+        and not use_main_webrtc
+        and user_type == "student"
+        and action == "read"
+    ):
         # Rendezvous Hashing을 사용하여 user_id 기반 일관성 있는 노드 선택
         node = cluster_manager.get_node_for_stream(user_id, use_sticky=True)
         if not node:
@@ -693,9 +731,7 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
             # 아래 "Sub/Standalone 모드" 로직으로 진행 (pass through)
         else:
             # Sub의 토큰 발급 엔드포인트로 리다이렉트
-            redirect_url = (
-                f"{node.api_url}/api/token?user_type={user_type}&user_id={user_id}"
-            )
+            redirect_url = f"{node.api_url}/api/token?user_type={user_type}&user_id={user_id}&action={action}"
 
             # 직접 Sub에 요청하여 토큰 받기
             import httpx
@@ -793,10 +829,14 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
     if user_type not in ["teacher", "student", "monitor"]:
         raise HTTPException(status_code=400, detail="Invalid user_type")
 
+    # Publish 권한 체크: 교사만 가능
+    if action == "publish" and user_type != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can publish streams")
+
     if not user_id or len(user_id) < 1:
         raise HTTPException(status_code=400, detail="user_id required")
 
-    token = generate_stream_token(user_type, user_id)
+    token = generate_stream_token(user_type, user_id, action)
 
     # Track token issuance
     tokens_issued_total.labels(user_type=user_type).inc()
@@ -809,7 +849,12 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
     if mode == "main":
         node_host = SERVER_IP
 
-    webrtc_url = f"http://{node_host}:{webrtc_port}/live/stream/whep?jwt={token}"
+    if action == "publish":
+        # Publishing uses WHIP
+        webrtc_url = f"http://{node_host}:{webrtc_port}/live/stream/whip?jwt={token}"
+    else:
+        # Reading uses WHEP
+        webrtc_url = f"http://{node_host}:{webrtc_port}/live/stream/whep?jwt={token}"
 
     # 응답 데이터 생성
     response_data = {
@@ -819,6 +864,7 @@ async def create_token_cluster_aware(user_type: str, user_id: str):
         "user_type": user_type,
         "user_id": user_id,
         "mode": mode,
+        "action": action,
     }
 
     # Main 모드에서 직접 서빙하는 경우 node_name 추가

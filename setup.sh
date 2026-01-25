@@ -15,23 +15,49 @@ if [ -f ".env" ]; then
     echo ""
 fi
 
-echo "1. 서버 IP 주소를 입력하세요"
-echo "   (학생들이 접속할 컴퓨터의 IP 주소)"
+echo "1. 서버 IP 주소 자동 감지 중..."
 echo ""
-echo "   확인 방법:"
+
+# 자동으로 IP 주소 감지
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    echo "   - macOS: 시스템 환경설정 > 네트워크에서 확인"
-    echo "   - 터미널: ifconfig | grep 'inet ' 입력"
+    # macOS
+    DETECTED_IPS=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}')
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    echo "   - Linux: ip addr show 또는 ifconfig 입력"
-    echo "   - 'inet' 항목을 확인 (예: 192.168.0.100)"
+    # Linux
+    DETECTED_IPS=$(hostname -I | tr ' ' '\n' | grep -v 127.0.0.1)
+else
+    # Windows WSL or other
+    DETECTED_IPS=$(ip addr show | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | cut -d'/' -f1)
 fi
+
+# IP 목록 출력
+echo "감지된 IP 주소:"
+IFS=$'\n'
+IP_ARRAY=($DETECTED_IPS)
+unset IFS
+
+if [ ${#IP_ARRAY[@]} -eq 0 ]; then
+    echo "   (감지된 IP가 없습니다)"
+    DEFAULT_IP="localhost"
+elif [ ${#IP_ARRAY[@]} -eq 1 ]; then
+    DEFAULT_IP="${IP_ARRAY[0]}"
+    echo "   1) $DEFAULT_IP (자동 선택됨)"
+else
+    for i in "${!IP_ARRAY[@]}"; do
+        echo "   $((i+1))) ${IP_ARRAY[$i]}"
+    done
+    DEFAULT_IP="${IP_ARRAY[0]}"
+fi
+
 echo ""
-read -p "서버 IP 주소: " SERVER_IP
+echo "   학생들이 접속할 IP 주소를 선택하세요"
+echo "   (일반적으로 Wi-Fi 또는 유선 랜 IP)"
+echo ""
+read -p "서버 IP 주소 [기본값: $DEFAULT_IP]: " SERVER_IP
 
 if [ -z "$SERVER_IP" ]; then
-    echo "[경고] IP 주소를 입력하지 않았습니다. localhost를 사용합니다."
-    SERVER_IP="localhost"
+    SERVER_IP="$DEFAULT_IP"
+    echo "기본값 사용: $SERVER_IP"
 fi
 
 echo ""

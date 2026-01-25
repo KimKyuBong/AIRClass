@@ -7,7 +7,7 @@ logDestinations: [stdout]
 # Ultra-low latency settings
 readTimeout: 24h  # Infinite timeout for static screens
 writeTimeout: 24h
-readBufferCount: 256  # Further reduced from 512 for minimum latency
+readBufferCount: 65536  # Increased to handle large SDP packets
 udpMaxPayloadSize: 1472  # Optimize for network MTU
 
 # RTMP 서버 활성화 (Android 앱으로부터 스트림 수신)
@@ -30,6 +30,7 @@ webrtcEncryption: no
 webrtcLocalUDPAddress: :8189
 webrtcLocalTCPAddress: :8189
 webrtcAllowOrigin: '*'
+webrtcIPsFromInterfaces: yes
 webrtcAdditionalHosts: []
 webrtcICEServers2:
   - url: stun:stun.l.google.com:19302

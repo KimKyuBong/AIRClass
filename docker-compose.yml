@@ -1,6 +1,6 @@
-# AIRClass Docker Compose - Main-Sub Architecture
+# AIRClass Docker Compose - Main-Sub Architecture with Redis
 # 사용법:
-#   기본 실행 (Main 1대, Sub 3대): docker-compose up
+#   기본 실행 (Main 1대, Sub 2대, Redis): docker-compose up
 #   확장: docker-compose up --scale sub=5
 #   종료: docker-compose down
 
@@ -8,7 +8,30 @@ version: '3.8'
 
 services:
   # ============================================
-  # Main Node - 요청 라우팅 & 클러스터 관리
+  # Redis - 메시지 브로커 & 캐시
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: airclass-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - airclass-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=redis"
+
+  # ============================================
+  # Main Node - 녹화 & 클러스터 관리
   # ============================================
   main:
     build:
@@ -16,28 +39,49 @@ services:
       dockerfile: Dockerfile
     container_name: airclass-main-node
     environment:
+      # 기본 설정
       MODE: main
       NODE_NAME: main
       NODE_HOST: main
-      USE_MAIN_WEBRTC: "false"  # Load balancing enabled: distribute to Sub nodes
+      NODE_PORT: 8000
+      
+      # 스트리밍 설정
+      RTMP_PORT: 1935
       WEBRTC_PORT: 8889
+      WEBRTC_UDP_PORT: 8189
+      
+      # 녹화 설정 (Main의 핵심 역할)
+      RECORDING_ENABLED: "true"
+      RECORDING_DIR: /recordings
+      SCREENSHOT_INTERVAL: 10  # 10초마다 스크린샷
+      
+      # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
-      # CORS 설정: 개발 환경에서는 "*", 프로덕션에서는 특정 origin 지정
-      # 예: CORS_ORIGINS=http://192.168.1.100:5173,http://localhost:5173
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      # 서버 IP 주소 (WebRTC URL 생성에 사용)
-      SERVER_IP: ${SERVER_IP:-localhost}
-      # 클러스터 보안 키 (Main-Sub 노드 간 인증)
       CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      
+      # 네트워크 설정
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SERVER_IP: ${SERVER_IP:-localhost}
+      
+      # Redis 연결
+      REDIS_URL: redis://redis:6379
+      
+      # 최대 연결 수 (Main은 제한 없음)
+      MAX_CONNECTIONS: 0
     ports:
-      - "8000:8000"  # API 포트
-      - "1935:1935"  # RTMP 포트 (Android 앱용)
-      - "8889:8889"  # WebRTC HTTP 포트
-      - "8189:8189/udp"  # WebRTC UDP 포트
+      - "8000:8000"       # API
+      - "1935:1935"       # RTMP (Android 앱용)
+      - "8889:8889"       # WebRTC HTTP
+      - "8189:8189/udp"   # WebRTC UDP
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker 소켓 마운트 (외부 포트 감지용)
+      - /var/run/docker.sock:/var/run/docker.sock
+      - recordings:/recordings  # 녹화 파일 저장
+      - screenshots:/screenshots  # 스크린샷 저장
     networks:
       - airclass-network
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -50,7 +94,7 @@ services:
 
 
   # ============================================
-  # Sub Nodes - 실제 스트리밍 처리 (고정 포트)
+  # Sub Nodes - 실시간 스트림 배포 (필수 구성)
   # ============================================
   sub-1:
     build:
@@ -63,23 +107,38 @@ services:
       NODE_NAME: sub-1
       NODE_HOST: sub-1
       NODE_PORT: 8000
-      RTMP_PORT: 1935
+      NODE_SEQUENTIAL: 1
+      
+      # 스트리밍 설정
       WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8190  # 고정 UDP 포트
-      MAX_CONNECTIONS: 150
+      WEBRTC_UDP_PORT: 8190
+      
+      # Redis 연결
+      REDIS_URL: redis://redis:6379
+      
+      # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      
+      # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       SERVER_IP: ${SERVER_IP:-localhost}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      
+      # Sub 노드 수용 인원
+      MAX_CONNECTIONS: 150
     ports:
-      - "8001:8000"      # API
-      - "8890:8889"      # WebRTC HTTP
-      - "8190:8190/udp"  # WebRTC UDP (같은 포트 매핑)
+      - "8001:8000"       # API
+      - "8890:8889"       # WebRTC HTTP
+      - "8190:8190/udp"   # WebRTC UDP
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - recordings:/recordings
+      - screenshots:/screenshots
     networks:
       - airclass-network
     depends_on:
+      redis:
+        condition: service_healthy
       main:
         condition: service_healthy
     healthcheck:
@@ -103,63 +162,38 @@ services:
       NODE_NAME: sub-2
       NODE_HOST: sub-2
       NODE_PORT: 8000
-      RTMP_PORT: 1935
+      NODE_SEQUENTIAL: 2
+      
+      # 스트리밍 설정
       WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8191  # 고정 UDP 포트
-      MAX_CONNECTIONS: 150
+      WEBRTC_UDP_PORT: 8191
+      
+      # Redis 연결
+      REDIS_URL: redis://redis:6379
+      
+      # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      
+      # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       SERVER_IP: ${SERVER_IP:-localhost}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      
+      # Sub 노드 수용 인원
+      MAX_CONNECTIONS: 150
     ports:
-      - "8002:8000"      # API
-      - "8891:8889"      # WebRTC HTTP
-      - "8191:8191/udp"  # WebRTC UDP (같은 포트 매핑)
+      - "8002:8000"       # API
+      - "8891:8889"       # WebRTC HTTP
+      - "8191:8191/udp"   # WebRTC UDP
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - recordings:/recordings
+      - screenshots:/screenshots
     networks:
       - airclass-network
     depends_on:
-      main:
+      redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      - "airclass.role=sub"
-
-  sub-3:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: airclass-sub-3
-    environment:
-      MODE: sub
-      MAIN_URL: http://main:8000
-      NODE_NAME: sub-3
-      NODE_HOST: sub-3
-      NODE_PORT: 8000
-      RTMP_PORT: 1935
-      WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8192  # 고정 UDP 포트
-      MAX_CONNECTIONS: 150
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-localhost}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
-    ports:
-      - "8003:8000"      # API
-      - "8892:8889"      # WebRTC HTTP
-      - "8192:8192/udp"  # WebRTC UDP (같은 포트 매핑)
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - airclass-network
-    depends_on:
       main:
         condition: service_healthy
     healthcheck:
@@ -174,7 +208,7 @@ services:
 
 
   # ============================================
-  # Frontend (Optional - 개발용)
+  # Frontend - 사용자 인터페이스
   # ============================================
   frontend:
     image: node:20-alpine
@@ -188,47 +222,21 @@ services:
     networks:
       - airclass-network
     environment:
-      # 내부 네트워크에서 접속시: VITE_BACKEND_URL=http://서버IP:8000 설정
-      # 예: VITE_BACKEND_URL=http://10.100.0.146:8000
-      - VITE_BACKEND_URL=${VITE_BACKEND_URL:-http://localhost:8000}
+      VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:8000}
+      BACKEND_HOST: main
+      MEDIAMTX_HOST: main
+    depends_on:
+      - main
     restart: unless-stopped
     labels:
       - "airclass.role=frontend"
-
-
-  # ============================================
-  # Monitoring (Optional - Grafana + Prometheus)
-  # ============================================
-  # prometheus:
-  #   image: prom/prometheus:latest
-  #   container_name: airclass-prometheus
-  #   volumes:
-  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-  #   ports:
-  #     - "9090:9090"
-  #   networks:
-  #     - airclass-network
-
-
-  # grafana:
-  #   image: grafana/grafana:latest
-  #   container_name: airclass-grafana
-  #   ports:
-  #     - "3000:3000"
-  #   networks:
-  #     - airclass-network
-  #   environment:
-  #     - GF_SECURITY_ADMIN_PASSWORD=admin
 
 
 networks:
   airclass-network:
     driver: bridge
 
-
-# ============================================
-# 볼륨 (데이터 영속성)
-# ============================================
 volumes:
-  prometheus-data:
-  grafana-data:
+  redis-data:
+  recordings:
+  screenshots:
