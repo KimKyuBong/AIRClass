@@ -48,7 +48,7 @@ class EngagementCalculator:
     # Main Calculation Methods
     # ============================================
 
-    async def calculate_attention_score(
+    def calculate_attention_score(
         self,
         quiz_participation_rate: float,
         avg_response_latency_ms: int,
