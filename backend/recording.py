@@ -1,289 +1,347 @@
 """
 AIRClass Recording Manager
-Main 노드: RTMP 스트림을 MP4 + HLS로 자동 녹화
-스크린샷: 10초마다 자동 캡처 및 저장
+실시간 스트림 녹화 및 VOD 관리
 """
 
+import logging
 import subprocess
 import os
-import logging
 from datetime import datetime
+from typing import Optional, Dict, List
 from pathlib import Path
-from typing import Optional
-import json
 
 logger = logging.getLogger(__name__)
 
 
 class RecordingManager:
-    """Main 노드의 녹화 관리자"""
+    """실시간 스트림 녹화 관리"""
 
-    def __init__(self, recording_dir: str, screenshot_dir: str, enabled: bool = True):
-        self.recording_dir = Path(recording_dir)
-        self.screenshot_dir = Path(screenshot_dir)
-        self.enabled = enabled
-        self.recording_process = None
-        self.current_session_id = None
-
-        # 디렉토리 생성
-        self.recording_dir.mkdir(parents=True, exist_ok=True)
-        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"📹 RecordingManager initialized")
-        logger.info(f"   Recording dir: {self.recording_dir}")
-        logger.info(f"   Screenshot dir: {self.screenshot_dir}")
-
-    def start_recording(self, session_id: str, stream_url: str = "rtmp://localhost/live/stream") -> bool:
+    def __init__(self, storage_path: str = "/storage/vod"):
         """
-        Main 노드의 RTMP 스트림 녹화 시작
+        초기화
         
         Args:
-            session_id: 수업 세션 ID (타임스탬프 기반)
-            stream_url: 녹화할 RTMP 스트림 URL
-        
-        Returns:
-            성공 여부
+            storage_path: VOD 저장 경로
         """
-        if not self.enabled:
-            logger.warning("⚠️ Recording is disabled")
-            return False
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+        
+        self.active_recordings: Dict[str, dict] = {}
+        
+        logger.info(f"💾 RecordingManager initialized: {storage_path}")
 
-        if self.recording_process is not None:
-            logger.warning("⚠️ Recording already in progress")
-            return False
-
+    def start_recording(
+        self,
+        session_id: str,
+        stream_url: str,
+        output_format: str = "mp4"
+    ) -> Dict:
+        """
+        스트림 녹화 시작
+        
+        Args:
+            session_id: 세션 ID
+            stream_url: RTMP/WebRTC 스트림 URL
+            output_format: 출력 형식 (mp4, mkv, avi)
+            
+        Returns:
+            {recording_id, status, file_path, started_at}
+        """
         try:
-            self.current_session_id = session_id
-            
-            # 녹화 파일 경로
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"class_{session_id}_{timestamp}"
-            
-            # MP4 녹화 파일 (메인)
-            mp4_path = self.recording_dir / f"{filename}.mp4"
-            
-            # HLS 세그먼트 (재생용)
-            hls_dir = self.recording_dir / f"{filename}_hls"
-            hls_dir.mkdir(parents=True, exist_ok=True)
-            hls_path = hls_dir / "index.m3u8"
+            recording_id = f"{session_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+            file_path = self.storage_path / f"{recording_id}.{output_format}"
             
             # ffmpeg 명령어 구성
-            # RTMP 입력 → MP4 + HLS 출력 (동시 처리)
-            ffmpeg_cmd = [
+            cmd = [
                 "ffmpeg",
-                "-rtsp_transport", "tcp",
                 "-i", stream_url,
                 "-c:v", "libx264",
-                "-preset", "veryfast",  # 빠른 처리
+                "-preset", "medium",
+                "-crf", "23",
                 "-c:a", "aac",
                 "-b:a", "128k",
-                "-f", "mp4",
-                str(mp4_path),
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-f", "hls",
-                "-hls_time", "10",
-                "-hls_list_size", "0",
-                str(hls_path),
+                "-rtbufsize", "100M",
+                str(file_path)
             ]
             
             # ffmpeg 프로세스 시작
-            self.recording_process = subprocess.Popen(
-                ffmpeg_cmd,
+            process = subprocess.Popen(
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL
+                universal_newlines=True
             )
             
-            # 메타데이터 저장
-            metadata = {
+            # 녹화 정보 저장
+            self.active_recordings[recording_id] = {
                 "session_id": session_id,
-                "start_time": datetime.now().isoformat(),
                 "stream_url": stream_url,
-                "mp4_file": str(mp4_path),
-                "hls_dir": str(hls_dir),
-                "status": "recording"
+                "file_path": str(file_path),
+                "process": process,
+                "started_at": datetime.utcnow(),
+                "status": "recording",
+                "output_format": output_format
             }
             
-            metadata_path = self.recording_dir / f"{filename}.json"
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
+            logger.info(f"🎬 Recording started: {recording_id}")
             
-            logger.info(f"✅ Recording started: {filename}")
-            logger.info(f"   MP4: {mp4_path}")
-            logger.info(f"   HLS: {hls_path}")
-            
-            return True
+            return {
+                "recording_id": recording_id,
+                "status": "recording",
+                "file_path": str(file_path),
+                "started_at": datetime.utcnow().isoformat()
+            }
             
         except Exception as e:
             logger.error(f"❌ Failed to start recording: {e}")
-            return False
+            return {
+                "recording_id": None,
+                "status": "error",
+                "error": str(e)
+            }
 
-    def stop_recording(self) -> Optional[dict]:
+    def stop_recording(self, recording_id: str) -> Dict:
         """
-        녹화 중지 및 메타데이터 업데이트
+        스트림 녹화 중지
         
+        Args:
+            recording_id: 녹화 ID
+            
         Returns:
-            녹화 정보 딕셔너리 또는 None
+            {status, file_path, duration_seconds}
         """
-        if self.recording_process is None:
-            logger.warning("⚠️ No recording in progress")
-            return None
-
         try:
-            # ffmpeg 프로세스 종료 (SIGINT)
-            self.recording_process.terminate()
-            self.recording_process.wait(timeout=30)
+            if recording_id not in self.active_recordings:
+                raise ValueError(f"Recording not found: {recording_id}")
             
-            logger.info(f"✅ Recording stopped: {self.current_session_id}")
+            recording = self.active_recordings[recording_id]
+            process = recording["process"]
             
-            # 메타데이터 업데이트
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"class_{self.current_session_id}_{timestamp}"
-            metadata_path = self.recording_dir / f"{filename}.json"
+            # ffmpeg 프로세스 종료
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
             
-            if metadata_path.exists():
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                
-                metadata["status"] = "completed"
-                metadata["end_time"] = datetime.now().isoformat()
-                
-                with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f, indent=2)
-                
-                return metadata
+            file_path = Path(recording["file_path"])
             
-            return None
+            # 파일 정보 조회
+            duration = self._get_video_duration(str(file_path))
+            file_size = file_path.stat().st_size if file_path.exists() else 0
+            
+            # 녹화 정보 업데이트
+            recording["status"] = "completed"
+            recording["ended_at"] = datetime.utcnow()
+            recording["duration_seconds"] = duration
+            recording["file_size_bytes"] = file_size
+            
+            logger.info(f"✅ Recording stopped: {recording_id}")
+            
+            return {
+                "recording_id": recording_id,
+                "status": "completed",
+                "file_path": str(file_path),
+                "duration_seconds": duration,
+                "file_size_mb": round(file_size / 1024 / 1024, 2) if file_size > 0 else 0
+            }
             
         except Exception as e:
             logger.error(f"❌ Failed to stop recording: {e}")
-            if self.recording_process:
-                self.recording_process.kill()
-            return None
-        finally:
-            self.recording_process = None
-            self.current_session_id = None
+            return {
+                "recording_id": recording_id,
+                "status": "error",
+                "error": str(e)
+            }
 
-    def capture_screenshot(self) -> Optional[str]:
+    def get_recording_status(self, recording_id: str) -> Dict:
         """
-        현재 RTMP 스트림에서 스크린샷 캡처
-        Main 노드의 MediaMTX에서 프레임 추출
+        녹화 상태 조회
         
+        Args:
+            recording_id: 녹화 ID
+            
         Returns:
-            저장된 스크린샷 파일 경로 또는 None
+            {status, file_size_mb, duration_seconds}
         """
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            screenshot_path = self.screenshot_dir / f"screenshot_{timestamp}.jpg"
+            if recording_id not in self.active_recordings:
+                raise ValueError(f"Recording not found: {recording_id}")
             
-            # ffmpeg: RTMP 입력 → JPG 단일 프레임 추출 (빠름)
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-rtsp_transport", "tcp",
-                "-i", "rtmp://localhost/live/stream",
-                "-frames:v", "1",
-                "-f", "image2",
-                "-y",
-                str(screenshot_path),
-            ]
+            recording = self.active_recordings[recording_id]
+            file_path = Path(recording["file_path"])
             
-            # 5초 타임아웃으로 실행
-            result = subprocess.run(
-                ffmpeg_cmd,
-                timeout=5,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+            status = recording["status"]
+            file_size = file_path.stat().st_size if file_path.exists() else 0
             
-            if result.returncode == 0 and screenshot_path.exists():
-                logger.debug(f"📸 Screenshot captured: {screenshot_path}")
-                return str(screenshot_path)
-            else:
-                logger.warning(f"⚠️ Screenshot capture failed")
-                return None
-                
-        except subprocess.TimeoutExpired:
-            logger.warning("⚠️ Screenshot capture timeout")
-            return None
+            result = {
+                "recording_id": recording_id,
+                "status": status,
+                "file_size_mb": round(file_size / 1024 / 1024, 2) if file_size > 0 else 0,
+                "started_at": recording["started_at"].isoformat()
+            }
+            
+            if status == "completed" and "duration_seconds" in recording:
+                result["duration_seconds"] = recording["duration_seconds"]
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"❌ Failed to capture screenshot: {e}")
-            return None
+            logger.error(f"❌ Failed to get recording status: {e}")
+            return {
+                "recording_id": recording_id,
+                "status": "error",
+                "error": str(e)
+            }
 
-    def get_recordings_list(self) -> list:
-        """녹화된 모든 파일 목록 조회"""
+    def list_recordings(self, session_id: str) -> List[Dict]:
+        """
+        세션별 녹화 목록
+        
+        Args:
+            session_id: 세션 ID
+            
+        Returns:
+            [{recording_id, status, created_at, duration_seconds}]
+        """
         try:
             recordings = []
             
-            for metadata_file in self.recording_dir.glob("*.json"):
-                with open(metadata_file, 'r') as f:
-                    metadata = json.load(f)
-                    recordings.append(metadata)
+            for recording_id, recording in self.active_recordings.items():
+                if recording["session_id"] == session_id:
+                    item = {
+                        "recording_id": recording_id,
+                        "status": recording["status"],
+                        "created_at": recording["started_at"].isoformat()
+                    }
+                    
+                    if "duration_seconds" in recording:
+                        item["duration_seconds"] = recording["duration_seconds"]
+                    
+                    if "file_size_bytes" in recording:
+                        item["file_size_mb"] = round(recording["file_size_bytes"] / 1024 / 1024, 2)
+                    
+                    recordings.append(item)
             
-            return sorted(recordings, key=lambda x: x["start_time"], reverse=True)
+            return recordings
             
         except Exception as e:
-            logger.error(f"❌ Failed to get recordings list: {e}")
+            logger.error(f"❌ Failed to list recordings: {e}")
             return []
 
-    def cleanup_old_recordings(self, keep_days: int = 7) -> int:
+    def delete_recording(self, recording_id: str) -> Dict:
         """
-        오래된 녹화 파일 자동 삭제
+        녹화 파일 삭제
         
         Args:
-            keep_days: 유지할 기간 (일)
-        
+            recording_id: 녹화 ID
+            
         Returns:
-            삭제된 파일 개수
+            {status, deleted_at}
         """
-        import time
-        
         try:
-            deleted_count = 0
-            current_time = time.time()
-            cutoff_time = current_time - (keep_days * 86400)
+            if recording_id not in self.active_recordings:
+                raise ValueError(f"Recording not found: {recording_id}")
             
-            for file in self.recording_dir.rglob("*"):
-                if file.is_file() and file.stat().st_mtime < cutoff_time:
-                    file.unlink()
-                    deleted_count += 1
-                    logger.info(f"🗑️ Deleted old file: {file}")
+            recording = self.active_recordings[recording_id]
+            file_path = Path(recording["file_path"])
             
-            logger.info(f"✅ Cleanup completed: {deleted_count} files deleted")
-            return deleted_count
+            # 녹화 중인 경우 먼저 중지
+            if recording["status"] == "recording":
+                self.stop_recording(recording_id)
+            
+            # 파일 삭제
+            if file_path.exists():
+                file_path.unlink()
+                logger.info(f"🗑️ Recording deleted: {recording_id}")
+            
+            # 메모리에서 제거
+            del self.active_recordings[recording_id]
+            
+            return {
+                "recording_id": recording_id,
+                "status": "deleted",
+                "deleted_at": datetime.utcnow().isoformat()
+            }
             
         except Exception as e:
-            logger.error(f"❌ Failed to cleanup recordings: {e}")
+            logger.error(f"❌ Failed to delete recording: {e}")
+            return {
+                "recording_id": recording_id,
+                "status": "error",
+                "error": str(e)
+            }
+
+    def _get_video_duration(self, file_path: str) -> int:
+        """
+        비디오 파일의 지속시간 조회 (초 단위)
+        
+        Args:
+            file_path: 비디오 파일 경로
+            
+        Returns:
+            지속시간 (초)
+        """
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                file_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            duration = int(float(result.stdout.strip()))
+            return duration
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get video duration: {e}")
             return 0
+
+    def get_all_recordings(self) -> List[Dict]:
+        """
+        모든 녹화 조회
+        
+        Returns:
+            [{recording_id, session_id, status, created_at}]
+        """
+        recordings = []
+        
+        for recording_id, recording in self.active_recordings.items():
+            item = {
+                "recording_id": recording_id,
+                "session_id": recording["session_id"],
+                "status": recording["status"],
+                "created_at": recording["started_at"].isoformat()
+            }
+            recordings.append(item)
+        
+        return recordings
 
 
 # 전역 인스턴스
-recording_manager = None
+_recording_manager = None
 
 
-def init_recording_manager():
-    """RecordingManager 초기화 (Main 노드만)"""
-    global recording_manager
+async def init_recording_manager() -> Optional[RecordingManager]:
+    """RecordingManager 초기화"""
+    global _recording_manager
     
-    from config import MODE
-    
-    if MODE == "main":
-        recording_enabled = os.getenv("RECORDING_ENABLED", "true").lower() == "true"
-        recording_dir = os.getenv("RECORDING_DIR", "/recordings")
-        screenshot_dir = os.getenv("SCREENSHOT_DIR", "/screenshots")
+    try:
+        import os
+        storage_path = os.getenv("VOD_STORAGE_PATH", "/storage/vod")
+        _recording_manager = RecordingManager(storage_path)
         
-        recording_manager = RecordingManager(
-            recording_dir=recording_dir,
-            screenshot_dir=screenshot_dir,
-            enabled=recording_enabled
-        )
-    else:
-        logger.info("⚠️ RecordingManager not initialized (not Main node)")
-        recording_manager = None
+        logger.info("✅ RecordingManager initialized successfully")
+        return _recording_manager
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize RecordingManager: {e}")
+        return None
 
 
 def get_recording_manager() -> Optional[RecordingManager]:
     """RecordingManager 인스턴스 반환"""
-    return recording_manager
+    return _recording_manager

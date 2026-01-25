@@ -111,6 +111,49 @@ errors_total = Counter(
     ["type"],  # auth, stream, cluster, websocket
 )
 
+# ============================================
+# Include Routers
+# ============================================
+try:
+    from routers.quiz import router as quiz_router
+
+    app.include_router(quiz_router)
+    logger.info("✅ Quiz router included")
+except Exception as e:
+    logger.warning(f"⚠️ Quiz router import failed: {e}")
+
+try:
+    from routers.engagement import router as engagement_router
+
+    app.include_router(engagement_router)
+    logger.info("✅ Engagement router included")
+except Exception as e:
+    logger.warning(f"⚠️ Engagement router import failed: {e}")
+
+try:
+    from routers.dashboard import router as dashboard_router
+
+    app.include_router(dashboard_router)
+    logger.info("✅ Dashboard router included")
+except Exception as e:
+    logger.warning(f"⚠️ Dashboard router import failed: {e}")
+
+try:
+    from routers.recording import router as recording_router
+
+    app.include_router(recording_router)
+    logger.info("✅ Recording router included")
+except Exception as e:
+    logger.warning(f"⚠️ Recording router import failed: {e}")
+
+try:
+    from routers.vod import router as vod_router
+
+    app.include_router(vod_router)
+    logger.info("✅ VOD router included")
+except Exception as e:
+    logger.warning(f"⚠️ VOD router import failed: {e}")
+
 mediamtx_process = None
 
 
@@ -288,6 +331,23 @@ async def startup_event():
     """서버 시작 시 MediaMTX 실행 및 클러스터 초기화"""
     start_mediamtx()
     await init_cluster_mode()
+
+    # Initialize recording and VOD systems
+    try:
+        from recording import init_recording_manager
+
+        await init_recording_manager()
+        logger.info("✅ RecordingManager initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ RecordingManager initialization failed: {e}")
+
+    try:
+        from vod_storage import init_vod_storage
+
+        await init_vod_storage()
+        logger.info("✅ VODStorage initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ VODStorage initialization failed: {e}")
 
     # Print QR code for Android app connection
     local_ip = get_local_ip()
