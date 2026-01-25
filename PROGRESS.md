@@ -1,7 +1,7 @@
 # AIRClass 개발 진행현황
 
 **마지막 업데이트:** 2026-01-25  
-**진행률:** 6/18 작업 완료 (33%)
+**진행률:** 10/18 작업 완료 (56%)
 
 ## 📊 Phase별 진행 상황
 
@@ -39,7 +39,7 @@
   - 참여도 추적 이벤트
   - 콜백 시스템 (event-driven)
 
-### ✅ Phase 2: 학습 분석 기초 (1.5주일) - 50% 완료
+### ✅ Phase 2: 학습 분석 기초 (1.5주일) - 100% 완료
 
 #### Phase 2-1: MongoDB 스키마 정의 ✓
 - `models.py` (400줄)
@@ -70,18 +70,36 @@
   - WS /api/quiz/ws/statistics/{quiz_id} (실시간)
   - 자동 채점, 통계 계산
 
-#### Phase 2-3: 참여도 추적 ⏳
-- 필요한 것:
-  - `engagement.py` - 참여도 계산 엔진
-  - `routers/engagement.py` - API 엔드포인트
-  - 활동 기록 (채팅, 응답, 시간)
-  - 점수 계산 (0-100)
+#### Phase 2-3: 참여도 추적 ✓
+- `engagement.py` (500줄)
+  - 참여도 계산 엔진 (EngagementCalculator)
+  - 점수 계산: Attention, Participation, Quiz Accuracy (0-100)
+  - 혼동도 감지 (confusion detection)
+  - 추세 분석 (trend analysis)
+- `engagement_listener.py` (200줄)
+  - Redis 이벤트 수신기 (EngagementEventListener)
+  - 실시간 활동 추적 (Chat, Quiz Response, Presence)
+  - 자동 참여도 업데이트
+- `routers/engagement.py` (350줄)
+  - POST /api/engagement/track/chat
+  - POST /api/engagement/track/quiz-response
+  - GET /api/engagement/students/{session_id}
+  - GET /api/engagement/student/{session_id}/{student_id}
+  - GET /api/engagement/session-stats/{session_id}
+  - 점수 계산 API (attention, participation, overall)
+  - 혼동도 감지 API
+  - 추세 분석 API
 
-#### Phase 2-4: 교사 대시보드 - 실시간 ⏳
-- 필요한 것:
-  - `routers/dashboard.py` - 대시보드 API
-  - 실시간 참여도 시각화
-  - 혼동도 감지 알림
+#### Phase 2-4: 교사 대시보드 - 실시간 ✓
+- `routers/dashboard.py` (450줄)
+  - GET /api/dashboard/session/{session_id}/overview (세션 개요)
+  - GET /api/dashboard/session/{session_id}/students (학생 목록)
+  - GET /api/dashboard/session/{session_id}/student/{student_id} (학생 상세)
+  - GET /api/dashboard/alerts/{session_id} (알림)
+  - WS /api/dashboard/ws/session/{session_id} (실시간 스트림)
+  - 혼동도 감지 + 자동 알림
+  - 참여도 시각화 (레벨, 색상)
+  - 추천사항 생성
 
 ### ⏳ Phase 3: 녹화 + VOD (1.5주일) - 0% 진행
 
@@ -111,16 +129,20 @@ backend/
 ├── messaging.py           # Redis Pub/Sub 시스템 (350줄)
 ├── models.py              # Pydantic 데이터 모델 (400줄)
 ├── database.py            # MongoDB 비동기 관리자 (350줄)
+├── engagement.py          # 참여도 계산 엔진 (500줄) ✨ NEW
+├── engagement_listener.py # Engagement 이벤트 리스너 (200줄) ✨ NEW
 ├── mediamtx-sub.yml       # Sub 노드 스트리밍 설정
 ├── docker-entrypoint.sh   # 다중 노드 진입점 (업데이트)
 └── routers/
-    └── quiz.py            # 퀴즈 API 엔드포인트 (250줄)
+    ├── quiz.py            # 퀴즈 API 엔드포인트 (205줄)
+    ├── engagement.py      # 참여도 추적 API (350줄) ✨ NEW
+    └── dashboard.py       # 교사 대시보드 API (450줄) ✨ NEW
 
 root/
 ├── docker-compose.yml     # Main + Sub + Redis (업데이트)
 └── PROGRESS.md            # 이 파일
 
-총 신규 코드: ~2,500줄
+총 신규 코드: ~4,000줄 (이전 2,500줄 + 추가 1,500줄)
 ```
 
 ## 🎯 아키텍처 개요
