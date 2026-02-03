@@ -48,12 +48,12 @@ dev-stop:
 	@bash scripts/dev/stop-dev.sh
 
 test:
-	@echo "🧪 테스트 실행..."
-	@cd backend && python -m pytest tests/ -v
+	@echo "🧪 테스트 실행 (uv)..."
+	@cd backend && uv run pytest tests/ -v
 
 clean:
 	@echo "🧹 임시 파일 정리..."
-	@rm -rf backend/__pycache__ backend/.pytest_cache
+	@rm -rf backend/__pycache__ backend/.pytest_cache backend/.venv
 	@rm -rf frontend/dist frontend/.svelte-kit
 	@rm -rf logs/*.log
 	@find . -name "*.pyc" -delete

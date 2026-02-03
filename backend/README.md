@@ -10,25 +10,24 @@ FastAPI 기반 스크린샷 수신 서버 + 실시간 웹 뷰어
 - 🔴 LIVE 모드 자동 업데이트
 - 📊 통계 및 관리 기능
 
-## 설치
+## 설치 (uv 사용)
 
 ```bash
-# 가상환경 생성 (선택사항)
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# uv 설치 (없는 경우): https://docs.astral.sh/uv/
+# curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 의존성 설치
-pip install -r requirements.txt
+cd backend
+uv sync   # .venv 생성 + 의존성 설치
 ```
 
 ## 실행
 
 ```bash
-# 개발 모드 (자동 재시작)
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# uv로 실행 (권장)
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # 또는
-python main.py
+uv run python main.py
 ```
 
 서버 실행 후:
