@@ -11,13 +11,13 @@ from fastapi.responses import JSONResponse
 from typing import Optional, List, Dict
 from datetime import datetime
 
-from ai_vision import get_vision_analyzer
-from ai_nlp import get_nlp_analyzer
-from ai_feedback import get_feedback_generator
-from cache import get_cache
-from database import get_database_manager
-from gemini_service import GeminiService
-from teacher_ai_keys import (
+from services.ai.vision import get_vision_analyzer
+from services.ai.nlp import get_nlp_analyzer
+from services.ai.feedback import get_feedback_generator
+from core.cache import get_cache
+from core.database import get_database_manager
+from services.ai.gemini import GeminiService
+from core.ai_keys import (
     delete_teacher_gemini_key,
     get_env_gemini_key,
     get_teacher_gemini_key,

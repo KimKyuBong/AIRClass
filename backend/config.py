@@ -53,6 +53,15 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 SERVER_IP = os.getenv("SERVER_IP", "localhost")
 
 # ============================================
+# Database Configuration
+# ============================================
+MONGO_URL = os.getenv(
+    "MONGO_URL",
+    "mongodb://airclass:airclass2025@localhost:27017/airclass?authSource=admin",
+)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# ============================================
 # API Configuration
 # ============================================
 API_TITLE = "AIRClass Backend Server"

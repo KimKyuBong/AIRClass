@@ -4,14 +4,14 @@ AIRClass Engagement Tracking API
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from fastapi.responses import JSONResponse
 from typing import Optional, List, Dict
-from datetime import datetime
+from datetime import datetime, UTC
 
-from models import ActivityType, StudentEngagement, EngagementMetrics
-from engagement import get_engagement_tracker, EngagementCalculator
-from database import get_database_manager
+from schemas import ActivityType, StudentEngagement, EngagementMetrics
+from services.engagement_service import get_engagement_tracker, EngagementCalculator
+from core.database import get_database_manager
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,17 @@ def get_db():
     if not db:
         raise HTTPException(status_code=503, detail="Database not initialized")
     return db
+
+
+def _is_service_unavailable(exc: Exception) -> bool:
+    """DB/연결·이벤트 루프 등 서비스 이용 불가 상태면 True"""
+    msg = str(exc).lower()
+    return (
+        "event loop" in msg
+        or "connection" in msg
+        or "closed" in msg
+        or "not initialized" in msg
+    )
 
 
 # ============================================
@@ -78,6 +89,27 @@ async def track_chat_activity(
 
         if not engagement:
             raise HTTPException(status_code=500, detail="Failed to track chat activity")
+
+        # WebSocket으로 참여도 업데이트 브로드캐스트
+        try:
+            from utils import get_connection_manager
+
+            manager = get_connection_manager()
+            await manager.broadcast_engagement_update(
+                {
+                    "session_id": session_id,
+                    "student_id": student_id,
+                    "student_name": student_name,
+                    "engagement_score": engagement.engagement_score,
+                    "attention_score": engagement.attention_score,
+                    "participation_score": engagement.participation_score,
+                    "quiz_accuracy": engagement.quiz_accuracy,
+                }
+            )
+        except Exception as ws_error:
+            logger.warning(
+                f"⚠️ Failed to broadcast engagement via WebSocket: {ws_error}"
+            )
 
         return {
             "success": True,
@@ -129,6 +161,27 @@ async def track_quiz_response(
         if not engagement:
             raise HTTPException(status_code=500, detail="Failed to track quiz response")
 
+        # WebSocket으로 참여도 업데이트 브로드캐스트
+        try:
+            from utils import get_connection_manager
+
+            manager = get_connection_manager()
+            await manager.broadcast_engagement_update(
+                {
+                    "session_id": session_id,
+                    "student_id": student_id,
+                    "student_name": student_name,
+                    "engagement_score": engagement.engagement_score,
+                    "attention_score": engagement.attention_score,
+                    "participation_score": engagement.participation_score,
+                    "quiz_accuracy": engagement.quiz_accuracy,
+                }
+            )
+        except Exception as ws_error:
+            logger.warning(
+                f"⚠️ Failed to broadcast engagement via WebSocket: {ws_error}"
+            )
+
         return {
             "success": True,
             "engagement": engagement.model_dump(),
@@ -167,8 +220,13 @@ async def get_session_engagement(
             "engagements": [eng.model_dump() for eng in engagements],
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error getting session engagement: {e}")
+        # DB/연결·루프 오류는 503 (서비스 이용 불가)
+        if _is_service_unavailable(e):
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -208,6 +266,8 @@ async def get_student_engagement(
         raise
     except Exception as e:
         logger.error(f"❌ Error getting student engagement: {e}")
+        if _is_service_unavailable(e):
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -274,7 +334,7 @@ async def calculate_attention_score(
     """
     try:
         calculator = EngagementCalculator()
-        score = await calculator.calculate_attention_score(
+        score = calculator.calculate_attention_score(
             quiz_participation_rate=quiz_participation_rate,
             avg_response_latency_ms=avg_response_latency_ms,
             screen_time_minutes=screen_time_minutes,
@@ -476,8 +536,8 @@ async def detect_confusion(
 
 @router.post("/analyze-trend")
 async def analyze_trend(
-    recent_scores: List[float],
-    window_minutes: int = 10,
+    recent_scores: List[float] = Body(..., embed=True),
+    window_minutes: int = Body(10, embed=True),
 ):
     """
     참여도 추세 분석
@@ -529,5 +589,5 @@ async def engagement_health(
         "status": "healthy",
         "tracker": tracker is not None,
         "database": db is not None,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }

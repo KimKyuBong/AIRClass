@@ -8,12 +8,12 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Depends, WebSocket, Query
 from fastapi.responses import JSONResponse
 from typing import Optional, List, Dict
-from datetime import datetime
+from datetime import datetime, UTC
 
-from models import ActivityType
-from engagement import get_engagement_tracker, EngagementCalculator
-from database import get_database_manager
-from messaging import get_messaging_system
+from schemas import ActivityType
+from services.engagement_service import get_engagement_tracker, EngagementCalculator
+from core.database import get_database_manager
+from core.messaging import get_messaging_system
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,17 @@ def get_messaging():
     if not messaging:
         raise HTTPException(status_code=503, detail="Messaging system not initialized")
     return messaging
+
+
+def _is_service_unavailable(exc: Exception) -> bool:
+    """DB/연결·이벤트 루프 등 서비스 이용 불가 상태면 True"""
+    msg = str(exc).lower()
+    return (
+        "event loop" in msg
+        or "connection" in msg
+        or "closed" in msg
+        or "not initialized" in msg
+    )
 
 
 # ============================================
@@ -118,8 +129,12 @@ async def get_session_overview(
 
     except HTTPException:
         raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error getting session overview: {e}")
+        if _is_service_unavailable(e):
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -210,8 +225,12 @@ async def get_students_dashboard(
             "students": student_data,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error getting students dashboard: {e}")
+        if _is_service_unavailable(e):
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -311,8 +330,12 @@ async def get_student_details(
 
     except HTTPException:
         raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error getting student details: {e}")
+        if _is_service_unavailable(e):
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -358,7 +381,7 @@ async def get_alerts(
                             "student_name": eng.student_name,
                             "message": f"{eng.student_name}이(가) 혼동 상태로 보입니다 (확신도: {confidence:.1%})",
                             "confidence": confidence,
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now(UTC).isoformat(),
                         }
                     )
 
@@ -373,7 +396,7 @@ async def get_alerts(
                             "student_name": eng.student_name,
                             "message": f"{eng.student_name}의 정답률이 매우 낮습니다 ({eng.metrics.quiz_accuracy:.1%})",
                             "accuracy": eng.metrics.quiz_accuracy,
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now(UTC).isoformat(),
                         }
                     )
 
@@ -390,7 +413,7 @@ async def get_alerts(
                             "student_id": eng.student_id,
                             "student_name": eng.student_name,
                             "message": f"{eng.student_name}이(가) 아직 응답하지 않았습니다",
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now(UTC).isoformat(),
                         }
                     )
 
@@ -403,8 +426,12 @@ async def get_alerts(
             ),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error getting alerts: {e}")
+        if _is_service_unavailable(e):
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -561,5 +588,5 @@ async def dashboard_health(
         "tracker": tracker is not None,
         "database": db is not None,
         "messaging": messaging is not None,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
