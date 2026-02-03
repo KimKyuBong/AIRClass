@@ -21,6 +21,9 @@ router = APIRouter(tags=["system"])
 # ConnectionManager 싱글톤 가져오기
 manager = get_connection_manager()
 
+# MediaMTX API URL
+MEDIAMTX_API_URL = os.getenv("MEDIAMTX_API_URL", "http://127.0.0.1:9997")
+
 
 @router.get("/")
 async def root():
