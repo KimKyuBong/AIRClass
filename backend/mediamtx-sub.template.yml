@@ -1,0 +1,64 @@
+# MediaMTX Configuration for Sub Nodes (template)
+# __WEBRTC_UDP_PORT__ and __SERVER_IP__ are replaced at container start
+
+api: yes
+apiAddress: :9997
+
+logLevel: debug
+logFile: /tmp/mediamtx-sub.log
+
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8000/api/auth/mediamtx
+authHTTPExclude:
+- action: api
+- action: metrics
+
+pathDefaults:
+  source: rtmp://localhost/live/relay
+  sourceOnDemand: no
+
+paths:
+  "live/stream":
+    source: rtmp://main:1935/live/stream
+    sourceOnDemand: no
+    sourceOnDemandStartTimeout: 10s
+    sourceOnDemandCloseAfter: 10s
+    readUser: ''
+    readPass: ''
+    rtmpDisable: no
+    webrtcDisable: no
+    hlsDisable: no
+
+# WebRTC - ports from env (no default 8189)
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcAllowOrigin: '*'
+webrtcTrustedProxies: []
+webrtcLocalUDPAddress: :__WEBRTC_UDP_PORT__
+webrtcLocalTCPAddress: ':__WEBRTC_UDP_PORT__'
+webrtcIPsFromInterfaces: no
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: ['__SERVER_IP__']
+# STUN helps NAT traversal; client and server can discover reachable addresses
+webrtcICEServers: []
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: no
+
+hls: yes
+hlsAddress: :8888
+hlsEncryption: no
+hlsServerKey: server.key
+hlsServerCert: server.crt
+hlsAllowOrigin: '*'
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+
+record: no

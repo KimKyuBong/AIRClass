@@ -17,9 +17,16 @@ rtmpAddress: :1935
 # HLS 서버 비활성화 (Main는 프록시만 수행)
 hls: no
 
-# 인증
+# 인증 (HTTP 기반 - FastAPI가 JWT 검증)
 authMethod: http
 authHTTPAddress: http://127.0.0.1:8000/api/auth/mediamtx
+authInternalUsers:
+  - user: any
+    pass:
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
 
 # 기타 프로토콜 설정
 rtsp: yes

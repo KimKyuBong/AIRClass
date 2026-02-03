@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# MediaMTX 설정 파일은 /app에 있음
+cd /app
+
 echo "=============================================="
 echo "🚀 AIRClass Backend Starting"
 echo "=============================================="
@@ -22,23 +25,14 @@ if [ "$MODE" = "main" ]; then
     echo "📝 Updated Main MediaMTX config with ICE candidate: ${SERVER_IP}"
 fi
 
-# Sub 노드인 경우, 외부 포트를 사용하여 MediaMTX 설정 수정
+# Sub 노드인 경우, 템플릿에서 mediamtx-sub.yml 생성 (포트/호스트 확실 반영)
 if [ "$MODE" = "sub" ]; then
-    echo "🔍 Configuring WebRTC ICE candidates for Sub node..."
-    
-    # MediaMTX 설정 파일에 동적으로 ICE 후보 및 UDP 포트 설정
-    if [ ! -z "$WEBRTC_UDP_PORT" ]; then
-        # MediaMTX가 외부 포트와 동일한 포트로 리스닝하도록 변경
-        # 이렇게 하면 Docker 포트 매핑이 8190:8190처럼 1:1이 되어
-        # ICE candidate에 올바른 포트가 들어감
-        sed -i "s|webrtcLocalUDPAddress: :8189|webrtcLocalUDPAddress: :${WEBRTC_UDP_PORT}|g" mediamtx.yml
-        sed -i "s|webrtcLocalTCPAddress: ':8189'|webrtcLocalTCPAddress: ':${WEBRTC_UDP_PORT}'|g" mediamtx.yml
-        echo "✅ Set MediaMTX UDP/TCP port to: ${WEBRTC_UDP_PORT}"
-    fi
-    
-    # IP 주소를 ICE candidate에 추가
-    sed -i "s|webrtcAdditionalHosts: \[\]|webrtcAdditionalHosts: ['${SERVER_IP}']|g" mediamtx.yml
-    echo "📝 Updated MediaMTX config with ICE candidate: ${SERVER_IP}"
+    echo "🔍 Generating mediamtx-sub.yml from template..."
+    WEBRTC_PORT="${WEBRTC_UDP_PORT:-8189}"
+    sed -e "s/__WEBRTC_UDP_PORT__/${WEBRTC_PORT}/g" -e "s/__SERVER_IP__/${SERVER_IP}/g" \
+        mediamtx-sub.template.yml > mediamtx-sub.yml
+    echo "✅ webrtcLocalUDPAddress/TCP: :${WEBRTC_PORT}, webrtcAdditionalHosts: ${SERVER_IP}"
+    grep -E "webrtcLocal|webrtcAdditional" mediamtx-sub.yml || true
 fi
 
 # MediaMTX 시작 (Main과 Sub는 다른 설정 파일 사용)
@@ -48,6 +42,9 @@ if [ "$MODE" = "main" ]; then
     ./mediamtx mediamtx-main.yml &
 elif [ "$MODE" = "sub" ]; then
     echo "   Using Sub configuration (Stream Relay enabled)"
+    # 환경 변수로 ICE 포트 강제 (설정 파일만으로는 반영 안 될 수 있음)
+    export MTX_WEBRTCLOCALUDPADDRESS=":${WEBRTC_UDP_PORT:-8189}"
+    export MTX_WEBRTCLOCALTCPADDRESS=":${WEBRTC_UDP_PORT:-8189}"
     ./mediamtx mediamtx-sub.yml &
 else
     echo "   Using Standard configuration"

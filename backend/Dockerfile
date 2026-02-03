@@ -18,10 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # MediaMTX 다운로드 (ARM/x86 자동 감지)
 ARG TARGETARCH
-RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64v8" || echo "amd64") && \
-    wget https://github.com/bluenviron/mediamtx/releases/download/v1.9.3/mediamtx_v1.9.3_linux_${ARCH}.tar.gz && \
-    tar -xzf mediamtx_v1.9.3_linux_${ARCH}.tar.gz && \
-    rm mediamtx_v1.9.3_linux_${ARCH}.tar.gz && \
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    wget https://github.com/bluenviron/mediamtx/releases/download/v1.16.0/mediamtx_v1.16.0_linux_${ARCH}.tar.gz && \
+    tar -xzf mediamtx_v1.16.0_linux_${ARCH}.tar.gz && \
+    rm mediamtx_v1.16.0_linux_${ARCH}.tar.gz && \
     chmod +x mediamtx
 
 # 애플리케이션 코드 복사
@@ -29,8 +29,13 @@ COPY config.py .
 COPY main.py .
 COPY mediamtx.yml .
 COPY mediamtx-main.yml .
-COPY cluster.py .
-COPY discovery.py .
+COPY mediamtx-sub.yml .
+COPY mediamtx-sub.template.yml .
+COPY core/ ./core/
+COPY routers/ ./routers/
+COPY services/ ./services/
+COPY schemas/ ./schemas/
+COPY utils/ ./utils/
 
 # 포트 노출
 EXPOSE 8000 1935 8888

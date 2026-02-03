@@ -1,12 +1,44 @@
 # AIRClass Docker Compose - Main-Sub Architecture with Redis
 # 사용법:
-#   기본 실행 (Main 1대, Sub 2대, Redis): docker-compose up
-#   확장: docker-compose up --scale sub=5
+#   기본 실행 (Main 1대, Sub 3대): docker-compose up
+#   같은 PC에서 여러 인스턴스: PORT_OFFSET=100 ./scripts/gen-port-range.sh >> .env && docker-compose up
 #   종료: docker-compose down
+#
+# 포트 범위 (같은 컴퓨터에서 여러 Main/Sub 세트 실행 시):
+#   .env에 PORT_OFFSET=0 (기본)이면 8000,1935,8889,8189(Main), 8001~8003,8890~8892,8190~8192(Sub)
+#   PORT_OFFSET=100 이면 8100,2035,8989,8289(Main), 8101~8103,8990~8992,8290~8292(Sub)
+#   생성: ./scripts/gen-port-range.sh [OFFSET]  → .env에 붙여넣거나 export 후 사용
 
 version: '3.8'
 
 services:
+  # ============================================
+  # MongoDB - 데이터베이스
+  # ============================================
+  mongodb:
+    image: mongo:7
+    container_name: airclass-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-airclass}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-airclass2025}
+      MONGO_INITDB_DATABASE: airclass
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+    networks:
+      - airclass-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=database"
+
   # ============================================
   # Redis - 메시지 브로커 & 캐시
   # ============================================
@@ -31,7 +63,8 @@ services:
       - "airclass.role=redis"
 
   # ============================================
-  # Main Node - 녹화 & 클러스터 관리
+  # Main Node - RTMP 수신, 녹화, 클러스터 관리 (스트리밍 배포 안 함)
+  # Sub 노드들이 Main에서 스트림을 Pull하여 학생들에게 배포
   # ============================================
   main:
     build:
@@ -44,6 +77,8 @@ services:
       NODE_NAME: main
       NODE_HOST: main
       NODE_PORT: 8000
+      # 외부(호스트) API 포트 - mDNS/자동검색에 광고용 (포트 범위 사용 시 필수)
+      MAIN_API_PORT: ${MAIN_API_PORT:-8000}
       
       # 스트리밍 설정
       RTMP_PORT: 1935
@@ -66,13 +101,17 @@ services:
       # Redis 연결
       REDIS_URL: redis://redis:6379
       
+      # MongoDB 연결
+      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
+      
       # 최대 연결 수 (Main은 제한 없음)
       MAX_CONNECTIONS: 0
     ports:
-      - "8000:8000"       # API
-      - "1935:1935"       # RTMP (Android 앱용)
-      - "8889:8889"       # WebRTC HTTP
-      - "8189:8189/udp"   # WebRTC UDP
+      - "${MAIN_API_PORT:-8000}:8000"       # API
+      - "${MAIN_RTMP_PORT:-1935}:1935"      # RTMP (Android 앱용)
+      - "${MAIN_WEBRTC_HTTP_PORT:-8889}:8889"   # WebRTC HTTP
+      - "${MAIN_WEBRTC_UDP_PORT:-8189}:8189/udp"   # WebRTC ICE UDP
+      - "${MAIN_WEBRTC_UDP_PORT:-8189}:8189/tcp"   # WebRTC ICE TCP (fallback)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - recordings:/recordings  # 녹화 파일 저장
@@ -80,6 +119,8 @@ services:
     networks:
       - airclass-network
     depends_on:
+      mongodb:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -94,7 +135,8 @@ services:
 
 
   # ============================================
-  # Sub Nodes - 실시간 스트림 배포 (필수 구성)
+  # Sub Nodes - Main에서 스트림 Pull → 학생들에게 WebRTC 배포
+  # 각 Sub 노드: 150명 수용, Main+Sub 페어로 배포, Sub만 수평 확장
   # ============================================
   sub-1:
     build:
@@ -103,7 +145,7 @@ services:
     container_name: airclass-sub-1
     environment:
       MODE: sub
-      MAIN_URL: http://main:8000
+      MAIN_NODE_URL: http://main:8000
       NODE_NAME: sub-1
       NODE_HOST: sub-1
       NODE_PORT: 8000
@@ -113,8 +155,14 @@ services:
       WEBRTC_PORT: 8889
       WEBRTC_UDP_PORT: 8190
       
+      # Main 노드에서 스트림 Pull (RTMP/WebRTC)
+      STREAM_SOURCE: rtmp://main:1935/live
+      
       # Redis 연결
       REDIS_URL: redis://redis:6379
+      
+      # MongoDB 연결
+      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
       
       # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
@@ -127,9 +175,10 @@ services:
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
     ports:
-      - "8001:8000"       # API
-      - "8890:8889"       # WebRTC HTTP
-      - "8190:8190/udp"   # WebRTC UDP
+      - "${SUB1_API_PORT:-8001}:8000"       # API
+      - "${SUB1_WEBRTC_HTTP_PORT:-8890}:8889"   # WebRTC HTTP
+      - "${SUB1_WEBRTC_UDP_PORT:-8190}:8190/udp"   # WebRTC ICE UDP
+      - "${SUB1_WEBRTC_UDP_PORT:-8190}:8190/tcp"   # WebRTC ICE TCP (fallback)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - recordings:/recordings
@@ -158,7 +207,7 @@ services:
     container_name: airclass-sub-2
     environment:
       MODE: sub
-      MAIN_URL: http://main:8000
+      MAIN_NODE_URL: http://main:8000
       NODE_NAME: sub-2
       NODE_HOST: sub-2
       NODE_PORT: 8000
@@ -168,8 +217,14 @@ services:
       WEBRTC_PORT: 8889
       WEBRTC_UDP_PORT: 8191
       
+      # Main 노드에서 스트림 Pull (RTMP/WebRTC)
+      STREAM_SOURCE: rtmp://main:1935/live
+      
       # Redis 연결
       REDIS_URL: redis://redis:6379
+      
+      # MongoDB 연결
+      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
       
       # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
@@ -182,9 +237,72 @@ services:
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
     ports:
-      - "8002:8000"       # API
-      - "8891:8889"       # WebRTC HTTP
-      - "8191:8191/udp"   # WebRTC UDP
+      - "${SUB2_API_PORT:-8002}:8000"       # API
+      - "${SUB2_WEBRTC_HTTP_PORT:-8891}:8889"   # WebRTC HTTP
+      - "${SUB2_WEBRTC_UDP_PORT:-8191}:8191/udp"   # WebRTC ICE UDP
+      - "${SUB2_WEBRTC_UDP_PORT:-8191}:8191/tcp"   # WebRTC ICE TCP (fallback)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - recordings:/recordings
+      - screenshots:/screenshots
+    networks:
+      - airclass-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      main:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "airclass.role=sub"
+
+  sub-3:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: airclass-sub-3
+    environment:
+      MODE: sub
+      MAIN_NODE_URL: http://main:8000
+      NODE_NAME: sub-3
+      NODE_HOST: sub-3
+      NODE_PORT: 8000
+      NODE_SEQUENTIAL: 3
+      
+      # 스트리밍 설정
+      WEBRTC_PORT: 8889
+      WEBRTC_UDP_PORT: 8192
+      
+      # Main 노드에서 스트림 Pull (RTMP/WebRTC)
+      STREAM_SOURCE: rtmp://main:1935/live
+      
+      # Redis 연결
+      REDIS_URL: redis://redis:6379
+      
+      # MongoDB 연결
+      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
+      
+      # 보안 설정
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      
+      # 네트워크 설정
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SERVER_IP: ${SERVER_IP:-localhost}
+      
+      # Sub 노드 수용 인원
+      MAX_CONNECTIONS: 150
+    ports:
+      - "${SUB3_API_PORT:-8003}:8000"       # API
+      - "${SUB3_WEBRTC_HTTP_PORT:-8892}:8889"   # WebRTC HTTP
+      - "${SUB3_WEBRTC_UDP_PORT:-8192}:8192/udp"   # WebRTC ICE UDP
+      - "${SUB3_WEBRTC_UDP_PORT:-8192}:8192/tcp"   # WebRTC ICE TCP (fallback)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - recordings:/recordings
@@ -237,6 +355,8 @@ networks:
     driver: bridge
 
 volumes:
+  mongodb-data:
+  mongodb-config:
   redis-data:
   recordings:
   screenshots:
