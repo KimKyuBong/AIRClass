@@ -78,22 +78,20 @@ echo -e "${NC}"
 log_info "Backend 서버 시작 중..."
 cd backend
 
-# Python venv 확인 및 생성
-if [ ! -d "venv" ]; then
-    log_warning "Python venv가 없습니다. 생성 중..."
-    python3 -m venv venv
+# uv 사용 (pyproject.toml 기준)
+if ! command -v uv >/dev/null 2>&1; then
+    log_error "uv가 설치되어 있지 않습니다. 설치: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
 fi
-
-# 의존성 설치 (venv 활성화 없이)
-if [ ! -f "venv/.installed" ]; then
-    log_info "Python 의존성 설치 중..."
-    venv/bin/pip install -q -r requirements.txt
-    touch venv/.installed
+if [ ! -d ".venv" ]; then
+    log_info "uv venv 생성 및 의존성 동기화..."
+    uv sync
 fi
+uv sync --quiet 2>/dev/null || uv sync
 
 # Backend 서버 백그라운드 실행
 log_info "FastAPI 서버 실행 중..."
-venv/bin/python main.py > ../logs/backend.log 2>&1 &
+uv run python main.py > ../logs/backend.log 2>&1 &
 BACKEND_PID=$!
 echo "$BACKEND_PID" > "../$BACKEND_PID_FILE"
 log_success "Backend 서버 시작됨 (PID: $BACKEND_PID)"

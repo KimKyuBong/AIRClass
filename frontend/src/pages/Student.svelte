@@ -103,6 +103,93 @@
     }
   }
 
+  /**
+   * 브라우저 SDP를 MediaMTX 호환 형식으로 변환
+   * MediaMTX는 일부 브라우저 확장 속성을 지원하지 않으므로 제거
+   * curl로 성공한 minimal SDP 형식에 맞춤
+   */
+  function cleanSdpForMediaMTX(sdp) {
+    const lines = sdp.split('\r\n');
+    const cleaned = [];
+    let hasIceLite = false;
+    let hasSetup = false;
+    let bundleGroup = null;
+    
+    for (let line of lines) {
+      // 빈 줄은 유지
+      if (line.trim() === '') {
+        cleaned.push(line);
+        continue;
+      }
+      
+      // 필수 속성은 모두 유지: v=, o=, s=, t=, m=, c=, a=mid, a=recvonly, a=rtcp-mux
+      // a=rtpmap, a=fmtp, a=ice-ufrag, a=ice-pwd, a=fingerprint
+      
+      // 제거할 확장 속성들
+      const removePatterns = [
+        /^a=extmap-allow-mixed/,     // 확장 맵 혼합 허용
+        /^a=msid-semantic:/,         // MSID 시맨틱
+        /^a=extmap:/,                // 확장 맵 (일부는 유지해야 할 수도 있음)
+      ];
+      
+      let shouldRemove = false;
+      for (let pattern of removePatterns) {
+        if (pattern.test(line)) {
+          shouldRemove = true;
+          break;
+        }
+      }
+      
+      // BUNDLE 그룹은 첫 번째만 유지
+      if (line.startsWith('a=group:BUNDLE')) {
+        if (!bundleGroup) {
+          bundleGroup = line;
+          cleaned.push(line);
+        }
+        shouldRemove = true;
+      }
+      
+      // ice-lite 확인 (서버가 ice-lite를 사용하는 경우)
+      if (line.startsWith('a=ice-lite')) {
+        hasIceLite = true;
+      }
+      
+      // setup 확인
+      if (line.startsWith('a=setup:')) {
+        hasSetup = true;
+        // setup:active로 강제 설정 (클라이언트는 active여야 함)
+        if (!line.includes('active')) {
+          line = 'a=setup:active';
+        }
+      }
+      
+      if (!shouldRemove) {
+        cleaned.push(line);
+      }
+    }
+    
+    // setup이 없으면 추가 (클라이언트는 active여야 함)
+    if (!hasSetup) {
+      // 마지막 m= 라인 뒤에 추가
+      for (let i = cleaned.length - 1; i >= 0; i--) {
+        if (cleaned[i].startsWith('m=')) {
+          cleaned.splice(i + 1, 0, 'a=setup:active');
+          break;
+        }
+      }
+    }
+    
+    // SDP를 다시 조합
+    let result = cleaned.join('\r\n');
+    
+    // 마지막에 빈 줄이 없으면 추가 (표준 SDP 형식)
+    if (!result.endsWith('\r\n')) {
+      result += '\r\n';
+    }
+    
+    return result;
+  }
+
   // Configure video element for ultra-low latency
   function configureVideoForLowLatency(video) {
     console.log('[Student] Configuring video for ultra-low latency');
@@ -289,7 +376,15 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      console.log('[Student] Created offer, sending to WHEP endpoint:', whepUrl);
+      console.log('[Student] Created offer, SDP length:', offer.sdp.length);
+      console.log('[Student] SDP preview:', offer.sdp.substring(0, 500));
+      
+      // SDP를 MediaMTX 호환 형식으로 변환
+      const cleanedSdp = cleanSdpForMediaMTX(offer.sdp);
+      console.log('[Student] Cleaned SDP length:', cleanedSdp.length);
+      console.log('[Student] Cleaned SDP preview:', cleanedSdp.substring(0, 500));
+
+      console.log('[Student] Sending cleaned offer to WHEP endpoint:', whepUrl);
 
       // Send offer to WHEP endpoint
       const response = await fetch(whepUrl, {
@@ -297,7 +392,7 @@
         headers: {
           'Content-Type': 'application/sdp'
         },
-        body: offer.sdp
+        body: cleanedSdp
       });
 
       if (!response.ok) {
@@ -308,6 +403,9 @@
       const answerSdp = await response.text();
       console.log('[Student] 📥 Received answer from server, length:', answerSdp.length);
       console.log('[Student] Answer SDP preview:', answerSdp.substring(0, 200));
+      // 디버깅: 서버 ICE 후보(포트) 확인
+      const candLines = answerSdp.split('\r\n').filter(l => l.startsWith('a=candidate:') || l.startsWith('c='));
+      if (candLines.length) console.log('[Student] Server ICE (c= / a=candidate):', candLines.slice(0, 10));
 
       await pc.setRemoteDescription({
         type: 'answer',
@@ -432,8 +530,19 @@
           <div class="w-3 h-3 rounded-full {isConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
           <h1 class="text-xl font-bold text-gray-800">🎓 {studentName}님의 수업</h1>
           {#if nodeInfo}
-            <span class="text-xs px-2 py-1 rounded bg-blue-100 text-blue-800 font-mono">
-              {nodeInfo.node_name} ({nodeInfo.mode})
+            {@const subNodeNum = nodeInfo.node_id?.match(/sub-(\d+)/)?.[1] || nodeInfo.node_name?.match(/sub-?(\d+)/i)?.[1] || null}
+            <span class="text-xs px-2 py-1 rounded bg-blue-100 text-blue-800 font-mono" title="노드 ID: {nodeInfo.node_id}">
+              {#if nodeInfo.mode === 'sub'}
+                {#if subNodeNum}
+                  서브 노드 #{subNodeNum} ({nodeInfo.node_id})
+                {:else}
+                  서브 노드: {nodeInfo.node_name} ({nodeInfo.node_id})
+                {/if}
+              {:else if nodeInfo.mode === 'main'}
+                메인 노드: {nodeInfo.node_name}
+              {:else}
+                {nodeInfo.node_name} ({nodeInfo.mode})
+              {/if}
             </span>
           {/if}
           {#if currentLatency > 0}

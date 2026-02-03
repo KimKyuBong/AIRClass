@@ -66,6 +66,72 @@
     }
   }
 
+  /**
+   * 브라우저 SDP를 MediaMTX 호환 형식으로 변환
+   */
+  function cleanSdpForMediaMTX(sdp) {
+    const lines = sdp.split('\r\n');
+    const cleaned = [];
+    let hasSetup = false;
+    let bundleGroup = null;
+    
+    for (let line of lines) {
+      if (line.trim() === '') {
+        cleaned.push(line);
+        continue;
+      }
+      
+      const removePatterns = [
+        /^a=extmap-allow-mixed/,
+        /^a=msid-semantic:/,
+        /^a=extmap:/,
+      ];
+      
+      let shouldRemove = false;
+      for (let pattern of removePatterns) {
+        if (pattern.test(line)) {
+          shouldRemove = true;
+          break;
+        }
+      }
+      
+      if (line.startsWith('a=group:BUNDLE')) {
+        if (!bundleGroup) {
+          bundleGroup = line;
+          cleaned.push(line);
+        }
+        shouldRemove = true;
+      }
+      
+      if (line.startsWith('a=setup:')) {
+        hasSetup = true;
+        if (!line.includes('active')) {
+          line = 'a=setup:active';
+        }
+      }
+      
+      if (!shouldRemove) {
+        cleaned.push(line);
+      }
+    }
+    
+    if (!hasSetup) {
+      for (let i = cleaned.length - 1; i >= 0; i--) {
+        if (cleaned[i].startsWith('m=')) {
+          cleaned.splice(i + 1, 0, 'a=setup:active');
+          break;
+        }
+      }
+    }
+    
+    let result = cleaned.join('\r\n');
+    if (!result.endsWith('\r\n')) {
+      result += '\r\n';
+    }
+    
+    return result;
+  }
+
   function configureVideoForLowLatency(video) {
     console.log('[Monitor] Configuring video for ultra-low latency');
     
@@ -161,10 +227,14 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
+      // SDP를 MediaMTX 호환 형식으로 변환
+      const cleanedSdp = cleanSdpForMediaMTX(offer.sdp);
+      console.log('[Monitor] Cleaned SDP length:', cleanedSdp.length);
+
       const response = await fetch(whepUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
-        body: offer.sdp
+        body: cleanedSdp
       });
 
       if (!response.ok) {
