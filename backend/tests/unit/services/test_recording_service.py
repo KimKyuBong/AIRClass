@@ -6,10 +6,10 @@ AIRClass Recording & VOD Tests
 import pytest
 from pathlib import Path
 import tempfile
-from datetime import datetime
+from datetime import datetime, UTC
 
-from recording import RecordingManager
-from vod_storage import VODStorage
+from services.recording_service import RecordingManager
+from services.vod_service import VODStorage
 
 
 # ============================================
@@ -148,7 +148,7 @@ class TestVODStorage:
             "video_id": video_id,
             "title": "Test Video",
             "description": "Test Description",
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.now(UTC).isoformat()
         }
         
         vod_storage._save_metadata(video_id, metadata)
@@ -277,7 +277,7 @@ class TestRecordingAndVODIntegration:
                 "title": "E2E Test Recording",
                 "teacher_name": "Test Teacher",
                 "student_count": 30,
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(UTC).isoformat()
             }
             vod_storage._save_metadata(video_id, metadata)
             

@@ -9,20 +9,13 @@ import sys
 from pathlib import Path
 
 # conftest.py 가져오기 (모듈 경로 설정)
-import models  # noqa: F401
+import schemas  # noqa: F401
 
 
 @pytest.fixture(scope="module")
 def setup_backend():
-    """백엔드 환경 설정"""
+    """백엔드 환경 설정. DB 초기화는 TestClient 요청 시 lifespan에서 올바른 루프에서 수행됨."""
     from main import app
-    from database import init_database_manager
-
-    # 비동기 이벤트 루프에서 DB 초기화
-    import asyncio
-
-    asyncio.run(init_database_manager())
-
     return app
 
 

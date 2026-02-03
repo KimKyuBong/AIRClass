@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 # conftest.py 가져오기 (모듈 경로 설정)
-import models  # noqa: F401
+import schemas  # noqa: F401
 
 
 @pytest.fixture(scope="module")

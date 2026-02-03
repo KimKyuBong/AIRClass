@@ -10,15 +10,15 @@ from pathlib import Path
 import tempfile
 
 # Import modules
-from ai_vision import VisionAnalyzer, init_vision_analyzer, get_vision_analyzer
-from ai_nlp import (
+from services.ai.vision import VisionAnalyzer, init_vision_analyzer, get_vision_analyzer
+from services.ai.nlp import (
     NLPAnalyzer,
     init_nlp_analyzer,
     get_nlp_analyzer,
     SentimentType,
     IntentType,
 )
-from ai_feedback import (
+from services.ai.feedback import (
     FeedbackGenerator,
     init_feedback_generator,
     get_feedback_generator,

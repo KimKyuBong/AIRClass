@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, "/Users/hwansi/Project/AirClass/backend")
 
-from engagement import EngagementCalculator
+from services.engagement_service import EngagementCalculator
 
 
 class TestAttentionScore:
