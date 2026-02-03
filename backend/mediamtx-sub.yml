@@ -6,8 +6,15 @@ api: yes
 apiAddress: :9997
 
 # Logging
-logLevel: info
+logLevel: debug
 logFile: /tmp/mediamtx-sub.log
+
+# Authentication
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8000/api/auth/mediamtx
+authHTTPExclude:
+- action: api
+- action: metrics
 
 # Environment variables
 pathDefaults:
@@ -15,57 +22,53 @@ pathDefaults:
   sourceOnDemand: no
 
 # Paths (스트림 경로 정의)
+# URL 경로와 일치: /live/stream/whep
 paths:
-  # Main 노드로부터의 스트림 수신
-  relay:
-    # Main RTMP 스트림을 로컬 RTMP로 중계
-    source: rtmp://main/live/stream
-    sourceOnDemand: no
+  "live/stream":
+    source: rtsp://main:8554/live/stream
+    sourceOnDemand: yes
     sourceOnDemandStartTimeout: 10s
     sourceOnDemandCloseAfter: 10s
     
     # WebRTC 활성화 (학생들이 WHEP로 시청)
-    webrtcDisable: no
+    readUser: ''
+    readPass: ''
+    
+    # Protocols
     rtmpDisable: no
+    webrtcDisable: no
     hlsDisable: no
-    dashDisable: no
-    
-    # HLS 설정 (대체 재생)
-    hlsSegmentCount: 3
-    hlsSegmentDuration: 4s
-    
-    # DASH 설정 (대체 재생)
-    dashSegmentCount: 6
-    dashSegmentDuration: 4s
-
-  # 헬스 체크용 테스트 스트림
-  test:
-    source: testsrc=s=320x240:d=10:r=10/1,aevalsrc=-2|channel_layout=stereo:s=44100:d=10[v][a]
-    sourceOnDemand: no
 
 # WebRTC 설정
-webrtcDisable: no
+webrtc: yes
 webrtcAddress: :8889
-webrtcEncryption: "no"  # 개발 환경
-webrtcICEServersCandidates: []
+webrtcEncryption: no
+webrtcAllowOrigin: '*'
+webrtcTrustedProxies: []
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ':8189'
+webrtcIPsFromInterfaces: no
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: []
+webrtcICEServers: []
 
 # RTMP 수신 (Main으로부터)
-rtmpDisable: no
+rtmp: yes
 rtmpAddress: :1935
+rtmpEncryption: no
 
 # HLS 서빙
-hlsDisable: no
+hls: yes
 hlsAddress: :8888
-hlsEncryption: "no"
+hlsEncryption: no
+hlsServerKey: server.key
+hlsServerCert: server.crt
+hlsAllowOrigin: '*'
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
 
-# DASH 서빙
-dashDisable: no
-dashAddress: :8890
-dashEncryption: "no"
-
-# HTTP 기본 인증 (선택)
-# httpAllowOrigin: "*"
-
-# 메모리 사용 최적화
-# maxClientReadBufferSize: 2097152
-# maxClientWriteBufferSize: 2097152
+# Recording (disabled for sub nodes)
+record: no
