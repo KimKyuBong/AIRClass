@@ -1,17 +1,16 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
   import { slide } from 'svelte/transition';
+  import { Room, RoomEvent } from 'livekit-client';
   
   let ws = null;
   let videoElement = null;
-  let pc = null; // WebRTC PeerConnection
+  let livekitRoom = null;
   let isConnected = false;
   let isVideoLoaded = false;
   let students = [];
   let messages = [];
   let newMessage = '';
-  let webrtcUrl = '';
-  let streamToken = '';
   let latencyMonitorInterval = null;
   let currentLatency = 0;
   
@@ -44,23 +43,34 @@
   onMount(async () => {
     console.log('[Teacher] Component mounted');
     
-    // Gemini Status Check
     fetchGeminiStatus();
     
-    // 전역 에러 핸들러 추가 (콘솔 못 보는 환경용)
     window.onerror = function(msg, url, line, col, error) {
       alert(`💥 GLOBAL ERROR 💥\n\nMsg: ${msg}\nLine: ${line}:${col}\nError: ${error ? error.stack : 'N/A'}`);
       return false;
     };
 
     connectWebSocket();
-    // Default to viewer mode (Android stream)
     streamSource = 'android';
     await fetchTokenAndInitWebRTC();
     startViewerPolling();
   });
 
-  // 버튼 클릭 핸들러 단순화
+  onDestroy(() => {
+    if (livekitRoom) {
+      livekitRoom.disconnect();
+    }
+    if (viewerPollInterval) {
+      clearInterval(viewerPollInterval);
+    }
+    if (latencyMonitorInterval) {
+      clearInterval(latencyMonitorInterval);
+    }
+    if (ws) {
+      ws.close();
+    }
+  });
+
   function handleBroadcastToggle() {
     try {
       if (isBroadcasting) {
@@ -77,7 +87,6 @@
     try {
       if (isBroadcasting) return;
 
-      // Check for secure context
       if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
         throw new Error(
           '브라우저가 화면 공유를 지원하지 않습니다.\n(원인: HTTPS가 아니거나 localhost가 아님)\n현재 주소: ' + window.location.href
@@ -86,7 +95,7 @@
       
       console.log('[Teacher] Starting broadcast...');
       
-      // 1. Get Display Media first
+      // 1. Get Display Media
       try {
         broadcastStream = await navigator.mediaDevices.getDisplayMedia({
           video: {
@@ -98,104 +107,45 @@
         });
       } catch (e) {
         if (e.name === 'NotAllowedError') {
-          // 사용자가 취소함 -> 조용히 리턴
           console.log('User cancelled screen share');
           return;
         }
         throw new Error(`화면 선택 실패: ${e.name} - ${e.message}`);
       }
       
-      // Handle user cancelling the picker
-      broadcastStream.getVideoTracks()[0].onended = () => {
-        console.log('[Teacher] User stopped screen share via browser UI');
-        stopBroadcast();
-      };
-      
-      // 2. Get Publish Token
-      console.log('[Teacher] Fetching publish token...');
-      let response;
-      try {
-        response = await fetch(
-          `/api/token?user_type=teacher&user_id=Teacher&action=publish`,
-          { method: 'POST' }
-        );
-      } catch (e) {
-        throw new Error(`토큰 요청 중 네트워크 오류 발생 (Mixed Content 또는 서버 다운?)\n${e.message}`);
-      }
-      
+      // 2. Get LiveKit token from backend
+      console.log('[Teacher] Fetching LiveKit token...');
+      const response = await fetch(`/api/livekit/token?user_id=Teacher&room_name=class&user_type=teacher`, { method: 'POST' });
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`토큰 발급 실패 (Status: ${response.status})\n서버 응답: ${errorText}`);
+        throw new Error(`토큰 발급 실패: ${errorText}`);
       }
+      const { token, url } = await response.json();
       
-      const data = await response.json();
-      let whipUrl = data.webrtc_url;
-      
-      // Proxy를 타도록 상대 경로로 변환
-      let originalWhipUrl = whipUrl;
-      try {
-        const urlObj = new URL(whipUrl);
-        whipUrl = urlObj.pathname + urlObj.search;
-      } catch (e) {
-        console.warn('URL parsing failed, using original', e);
+      // 3. Connect to LiveKit room
+      if (livekitRoom) {
+        await livekitRoom.disconnect();
       }
+      livekitRoom = new Room();
+      await livekitRoom.connect(url, token);
       
-      // 3. Stop existing viewer PC if any
-      if (pc) {
-        pc.close();
-        pc = null;
-      }
+      // 4. Publish tracks
+      const videoTrack = broadcastStream.getVideoTracks()[0];
+      const audioTrack = broadcastStream.getAudioTracks()[0];
+      await livekitRoom.localParticipant.publishTrack(videoTrack);
+      if (audioTrack) await livekitRoom.localParticipant.publishTrack(audioTrack);
       
-      // 4. Create Publisher PeerConnection
-      pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require'
-      });
-      
-      // Add tracks
-      broadcastStream.getTracks().forEach(track => {
-        pc.addTrack(track, broadcastStream);
-      });
-      
+      // 5. Preview locally
       if (videoElement) {
         videoElement.srcObject = broadcastStream;
         videoElement.muted = true;
         videoElement.play().catch(e => console.error('Preview play failed', e));
       }
 
-      // 5. Create Offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      
-      // 6. WHIP Signaling
-      console.log(`[Teacher] Sending offer to WHIP endpoint: ${whipUrl}`);
-      let whipResponse;
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 타임아웃
-
-        whipResponse = await fetch(whipUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/sdp' },
-          body: offer.sdp,
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-      } catch (e) {
-         if (e.name === 'AbortError') {
-            throw new Error(`방송 서버 연결 시간 초과 (10초).\n네트워크 상태를 확인하거나 서버 로그를 확인하세요.`);
-         }
-         throw new Error(`방송 서버(WHIP) 연결 실패.\n요청 URL: ${whipUrl}\n(원본: ${originalWhipUrl})\n에러: ${e.message}\n\n* HTTPS 접속 시 프록시 설정이 안되었거나 인증서 문제일 수 있습니다.`);
-      }
-      
-      if (!whipResponse.ok) {
-        const errText = await whipResponse.text();
-        throw new Error(`방송 시작 실패 (MediaMTX 오류)\nStatus: ${whipResponse.status}\n응답: ${errText}`);
-      }
-      
-      const answerSdp = await whipResponse.text();
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      broadcastStream.getVideoTracks()[0].onended = () => {
+        console.log('[Teacher] User stopped screen share via browser UI');
+        stopBroadcast();
+      };
       
       isBroadcasting = true;
       isVideoLoaded = true;
@@ -204,50 +154,49 @@
       console.error('[Teacher] Broadcast failed:', error);
       stopBroadcast();
       
-      // 사용자 요청대로 원본 에러 메시지와 스택 트레이스를 그대로 출력
       const errorDump = [
         `Message: ${error.message}`,
         `Name: ${error.name}`,
-        `Stack: ${error.stack || 'N/A'}`,
-        // fetch 에러인 경우 추가 정보가 있을 수 있음
-        error.cause ? `Cause: ${JSON.stringify(error.cause)}` : ''
+        `Stack: ${error.stack || 'N/A'}`
       ].filter(Boolean).join('\n\n');
 
       alert(`🚨 CRITICAL ERROR 🚨\n\n${errorDump}`);
     }
   }
 
-  function stopBroadcast() {
-    if (!isBroadcasting && !broadcastStream) return;
+  async function stopBroadcast() {
+    if (!isBroadcasting && !broadcastStream && !livekitRoom) return;
     
     console.log('[Teacher] Stopping broadcast...');
     
-    // Stop tracks
+    if (livekitRoom) {
+      await livekitRoom.disconnect();
+      livekitRoom = null;
+    }
+
     if (broadcastStream) {
       broadcastStream.getTracks().forEach(track => track.stop());
       broadcastStream = null;
-    }
-    
-    // Close PC
-    if (pc) {
-      pc.close();
-      pc = null;
     }
     
     if (videoElement) {
       videoElement.srcObject = null;
     }
     
+    if (latencyMonitorInterval) {
+      clearInterval(latencyMonitorInterval);
+      latencyMonitorInterval = null;
+    }
+    currentLatency = 0;
+    
     isBroadcasting = false;
     isVideoLoaded = false;
     
-    // Revert to Android viewer mode
     console.log('[Teacher] Reverting to Android viewer mode...');
     streamSource = 'android';
-    fetchTokenAndInitWebRTC();
+    await fetchTokenAndInitWebRTC();
   }
 
-  // 스트림 소스 전환 함수
   async function switchStreamSource(newSource) {
     if (isSourceSwitching) return;
     if (streamSource === newSource && !isBroadcasting) return;
@@ -256,35 +205,34 @@
     console.log(`[Teacher] Switching stream source from ${streamSource} to ${newSource}`);
     
     try {
-      // 기존 연결 정리
       if (isBroadcasting) {
-        stopBroadcast();
-      } else if (pc) {
-        pc.close();
-        pc = null;
+        await stopBroadcast();
+      } else if (livekitRoom) {
+        await livekitRoom.disconnect();
+        livekitRoom = null;
       }
       
       if (videoElement) {
         videoElement.srcObject = null;
       }
       
+      if (latencyMonitorInterval) {
+        clearInterval(latencyMonitorInterval);
+        latencyMonitorInterval = null;
+      }
+      currentLatency = 0;
+      
       isVideoLoaded = false;
       streamSource = newSource;
       
-      // 새 소스로 연결
       if (newSource === 'android') {
-        // Android 스트림 시청 모드
-        console.log('[Teacher] Switching to Android stream viewer mode');
         await fetchTokenAndInitWebRTC();
       } else if (newSource === 'pc') {
-        // PC 화면 공유 시작
-        console.log('[Teacher] Switching to PC broadcast mode');
         await startBroadcast();
       }
     } catch (error) {
       console.error('[Teacher] Error switching stream source:', error);
       alert(`소스 전환 실패: ${error.message}`);
-      // 실패 시 Android로 복귀
       streamSource = 'android';
       await fetchTokenAndInitWebRTC();
     } finally {
@@ -293,343 +241,71 @@
   }
 
   async function fetchTokenAndInitWebRTC() {
-    if (isBroadcasting) return; // Don't interrupt broadcast
+    if (isBroadcasting) return;
 
     try {
-      console.log('[Teacher] Fetching viewer token...');
-      // Use relative path for proxy support (HTTPS)
-      const response = await fetch(
-        `/api/token?user_type=teacher&user_id=Teacher&action=read`,
-        { method: 'POST' }
-      );
+      console.log('[Teacher] Fetching LiveKit token for viewer mode...');
+      const response = await fetch(`/api/livekit/token?user_id=Teacher&room_name=class&user_type=teacher`, { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to get token');
       
-      if (!response.ok) {
-        throw new Error('Failed to get token');
+      const { token, url } = await response.json();
+      
+      if (livekitRoom) {
+        await livekitRoom.disconnect();
       }
       
-      const data = await response.json();
-      webrtcUrl = data.webrtc_url;
-      streamToken = data.token;
+      livekitRoom = new Room();
+      await livekitRoom.connect(url, token);
+      console.log('[Teacher] Connected to LiveKit room');
       
-      // Proxy를 타도록 상대 경로로 변환 (HTTPS -> HTTP Mixed Content 방지)
-      try {
-        const urlObj = new URL(webrtcUrl);
-        webrtcUrl = urlObj.pathname + urlObj.search;
-        console.log('[Teacher] Converted WHEP URL to relative:', webrtcUrl);
-      } catch (e) {
-        console.warn('[Teacher] Failed to convert WHEP URL:', e);
-      }
-      
-      console.log('[Teacher] Token received:', data);
-      
-      // Wait for DOM to update
-      await tick();
-      
-      // Initialize WebRTC as viewer
-      initializeWebRTC(webrtcUrl);
+      livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        console.log('[Teacher] Track subscribed:', track.kind, 'from', participant.identity);
+        if (track.kind === 'video') {
+          if (videoElement) {
+            const element = track.attach();
+            element.id = 'remote-video';
+            videoElement.replaceWith(element);
+            videoElement = element;
+            isVideoLoaded = true;
+            videoElement.play().catch(e => console.warn('Play failed', e));
+            startLatencyMonitoring(videoElement);
+          }
+        }
+      });
+
+      // Handle existing tracks
+      livekitRoom.remoteParticipants.forEach(participant => {
+        participant.trackPublications.forEach(publication => {
+          if (publication.isSubscribed && publication.track?.kind === 'video') {
+            const element = publication.track.attach();
+            element.id = 'remote-video';
+            videoElement.replaceWith(element);
+            videoElement = element;
+            isVideoLoaded = true;
+            startLatencyMonitoring(videoElement);
+          }
+        });
+      });
       
     } catch (error) {
-      console.error('[Teacher] Token error:', error);
-      // Retry logic handled by caller or refresh
+      console.error('[Teacher] LiveKit connection error:', error);
     }
   }
 
-
-  // Configure video element for ultra-low latency
-  function configureVideoForLowLatency(video) {
-    console.log('[Teacher] Configuring video for ultra-low latency');
-    
-    // Disable buffering for Firefox
-    if (video.mozPreservesPitch !== undefined) {
-      video.mozPreservesPitch = false;
-    }
-    
-    // Force immediate playback without buffering
-    video.addEventListener('loadedmetadata', () => {
-      console.log('[Teacher] Video metadata loaded, forcing immediate playback');
-      video.play().catch(err => console.warn('[Teacher] Immediate play failed:', err.message));
-    });
-    
-    // Monitor video lag and keep at live edge
+  function startLatencyMonitoring(video) {
+    if (latencyMonitorInterval) clearInterval(latencyMonitorInterval);
     latencyMonitorInterval = setInterval(() => {
-      if (video.buffered.length > 0) {
+      if (video && video.buffered && video.buffered.length > 0) {
         const currentTime = video.currentTime;
         const bufferedEnd = video.buffered.end(video.buffered.length - 1);
         const lag = bufferedEnd - currentTime;
-        currentLatency = Math.round(lag * 1000); // Convert to ms
+        currentLatency = Math.max(0, Math.round(lag * 1000));
         
-        // If lag exceeds 200ms, jump to live edge
         if (lag > 0.2) {
-          console.warn('[Teacher] ⚠️ Video lag detected:', lag.toFixed(3), 's - jumping to live edge');
           video.currentTime = bufferedEnd - 0.02;
         }
-        
-        // If lag exceeds 500ms, something is wrong
-        if (lag > 0.5) {
-          console.error('[Teacher] 🔴 CRITICAL LAG:', lag.toFixed(3), 's - forcing live edge');
-          video.currentTime = bufferedEnd - 0.01;
-        }
       }
-    }, 50);
-  }
-
-  /**
-   * 브라우저 SDP를 MediaMTX 호환 형식으로 변환
-   * MediaMTX는 일부 브라우저 확장 속성을 지원하지 않으므로 제거
-   * curl로 성공한 minimal SDP 형식에 맞춤
-   */
-  function cleanSdpForMediaMTX(sdp) {
-    const lines = sdp.split('\r\n');
-    const cleaned = [];
-    let hasIceLite = false;
-    let hasSetup = false;
-    let bundleGroup = null;
-    
-    for (let line of lines) {
-      if (line.trim() === '') {
-        cleaned.push(line);
-        continue;
-      }
-      
-      const removePatterns = [
-        /^a=extmap-allow-mixed/,
-        /^a=msid-semantic:/,
-        /^a=extmap:/,
-      ];
-      
-      let shouldRemove = false;
-      for (let pattern of removePatterns) {
-        if (pattern.test(line)) {
-          shouldRemove = true;
-          break;
-        }
-      }
-      
-      if (line.startsWith('a=group:BUNDLE')) {
-        if (!bundleGroup) {
-          bundleGroup = line;
-          cleaned.push(line);
-        }
-        shouldRemove = true;
-      }
-      
-      if (line.startsWith('a=ice-lite')) {
-        hasIceLite = true;
-      }
-      
-      if (line.startsWith('a=setup:')) {
-        hasSetup = true;
-        if (!line.includes('active')) {
-          line = 'a=setup:active';
-        }
-      }
-      
-      if (!shouldRemove) {
-        cleaned.push(line);
-      }
-    }
-    
-    if (!hasSetup) {
-      for (let i = cleaned.length - 1; i >= 0; i--) {
-        if (cleaned[i].startsWith('m=')) {
-          cleaned.splice(i + 1, 0, 'a=setup:active');
-          break;
-        }
-      }
-    }
-    
-    let result = cleaned.join('\r\n');
-    if (!result.endsWith('\r\n')) {
-      result += '\r\n';
-    }
-    
-    return result;
-  }
-
-  async function initializeWebRTC(whepUrl, retryCount = 0) {
-    console.log('[Teacher] initializeWebRTC called with URL:', whepUrl, 'retry:', retryCount);
-    
-    if (!videoElement) {
-      console.error('[Teacher] videoElement not found! Retry count:', retryCount);
-      
-      if (retryCount < 10) {
-        setTimeout(() => initializeWebRTC(whepUrl, retryCount + 1), 200);
-        return;
-      } else {
-        console.error('[Teacher] Failed to get videoElement after 10 retries');
-        return;
-      }
-    }
-
-    console.log('[Teacher] videoElement exists:', videoElement);
-    console.log('[Teacher] Initializing WebRTC PeerConnection...');
-
-    try {
-      // Create RTCPeerConnection with ultra-low latency settings
-      pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' }
-        ],
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 0
-      });
-
-      // Handle incoming tracks
-      pc.ontrack = (event) => {
-        console.log('[Teacher] 🎥 Received track:', {
-          kind: event.track.kind,
-          id: event.track.id,
-          readyState: event.track.readyState,
-          muted: event.track.muted,
-          enabled: event.track.enabled,
-          streams: event.streams.length
-        });
-        
-        event.track.onended = () => {
-          console.log('[Teacher] ❌ Track ended:', event.track.kind);
-        };
-        
-        event.track.onmute = () => {
-          console.log('[Teacher] 🔇 Track muted:', event.track.kind);
-        };
-        
-        event.track.onunmute = () => {
-          console.log('[Teacher] 🔊 Track unmuted:', event.track.kind);
-          if (videoElement && videoElement.srcObject) {
-            console.log('[Teacher] 🎬 Attempting playback after unmute...');
-            videoElement.play().catch(err => console.warn('[Teacher] Playback attempt:', err.message));
-          }
-        };
-        
-        if (event.streams && event.streams.length > 0) {
-          if (!videoElement.srcObject) {
-            videoElement.srcObject = event.streams[0];
-            console.log('[Teacher] ✅ Set video srcObject to stream');
-            
-            isVideoLoaded = true;
-            
-            setTimeout(() => {
-              console.log('[Teacher] 🎬 Attempting immediate playback...');
-              videoElement.play()
-                .then(() => {
-                  console.log('[Teacher] ▶️ Video playback started successfully');
-                })
-                .catch(err => {
-                  console.warn('[Teacher] ⚠️ Playback failed:', err.message);
-                  setTimeout(() => {
-                    videoElement.play().catch(e => console.warn('[Teacher] Retry failed:', e.message));
-                  }, 100);
-                });
-            }, 50);
-          }
-          
-          event.streams[0].getTracks().forEach(track => {
-            console.log('[Teacher] Stream track:', {
-              kind: track.kind,
-              id: track.id,
-              readyState: track.readyState,
-              enabled: track.enabled,
-              muted: track.muted
-            });
-          });
-        }
-      };
-
-      // Handle ICE connection state changes
-      pc.oniceconnectionstatechange = () => {
-        console.log('[Teacher] ICE connection state:', pc.iceConnectionState);
-        
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-          console.log('[Teacher] 🎉 ICE connection established!');
-          if (videoElement && videoElement.srcObject) {
-            videoElement.play().catch(err => console.warn('[Teacher] Playback after ICE:', err.message));
-          }
-        }
-        
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          console.log('[Teacher] Connection failed, retrying in 3 seconds...');
-          setTimeout(() => initializeWebRTC(whepUrl), 3000);
-        }
-      };
-
-      pc.onicegatheringstatechange = () => {
-        console.log('[Teacher] ICE gathering state:', pc.iceGatheringState);
-      };
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('[Teacher] ICE candidate:', event.candidate.candidate);
-        } else {
-          console.log('[Teacher] ICE gathering complete');
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        console.log('[Teacher] Connection state:', pc.connectionState);
-      };
-
-      // Add transceiver to receive video
-      const videoTransceiver = pc.addTransceiver('video', { 
-        direction: 'recvonly'
-      });
-      const audioTransceiver = pc.addTransceiver('audio', { 
-        direction: 'recvonly'
-      });
-      console.log('[Teacher] 📡 Added transceivers - video:', videoTransceiver.mid, 'audio:', audioTransceiver.mid);
-
-      // Create offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      console.log('[Teacher] Created offer, SDP length:', offer.sdp.length);
-      
-      // SDP를 MediaMTX 호환 형식으로 변환
-      const cleanedSdp = cleanSdpForMediaMTX(offer.sdp);
-      console.log('[Teacher] Cleaned SDP length:', cleanedSdp.length);
-
-      console.log('[Teacher] Sending cleaned offer to WHEP endpoint:', whepUrl);
-
-      // Send offer to WHEP endpoint with JWT token
-      const response = await fetch(whepUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/sdp',
-          'Authorization': `Bearer ${streamToken}`
-        },
-        body: cleanedSdp
-      });
-
-      if (!response.ok) {
-        throw new Error(`WHEP request failed: ${response.status} ${response.statusText}`);
-      }
-
-      // Get answer from server
-      const answerSdp = await response.text();
-      console.log('[Teacher] 📥 Received answer from server, length:', answerSdp.length);
-
-      await pc.setRemoteDescription({
-        type: 'answer',
-        sdp: answerSdp
-      });
-
-      console.log('[Teacher] ✅ WebRTC signaling complete! Waiting for ICE connection...');
-      
-      pc.getTransceivers().forEach((transceiver, index) => {
-        console.log(`[Teacher] Transceiver ${index}:`, {
-          mid: transceiver.mid,
-          direction: transceiver.direction,
-          currentDirection: transceiver.currentDirection
-        });
-      });
-
-    } catch (error) {
-      console.error('[Teacher] WebRTC error:', error);
-      if (retryCount < 5) {
-        console.log('[Teacher] Retrying WebRTC connection in 3 seconds...');
-        setTimeout(() => initializeWebRTC(whepUrl, retryCount + 1), 3000);
-      }
-    }
+    }, 100);
   }
 
   function connectWebSocket() {
@@ -643,7 +319,6 @@
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      
       if (data.type === 'student_list') {
         students = data.students.map(name => ({
           name: name,
@@ -674,10 +349,7 @@
   }
   
   function startViewerPolling() {
-    // Initial fetch
     fetchViewers();
-    
-    // Poll every 2 seconds
     viewerPollInterval = setInterval(async () => {
       await fetchViewers();
     }, 2000);
@@ -693,16 +365,12 @@
         streamReady = data.stream_ready || false;
         nodeStats = data.node_stats || {};
         clusterMode = data.cluster_mode || 'unknown';
-        console.log('[Teacher] Viewers updated:', viewerCount, 'viewers', Object.keys(nodeStats).length, 'nodes');
-      } else {
-        console.error('[Teacher] Failed to fetch viewers:', response.status);
       }
     } catch (error) {
       console.error('[Teacher] Error fetching viewers:', error);
     }
   }
 
-  // Gemini API Functions
   async function fetchGeminiStatus() {
     try {
       const res = await fetch(`/api/ai/keys/gemini/status?teacher_id=Teacher`);
@@ -727,12 +395,11 @@
     geminiError = '';
     geminiNotice = '';
     try {
-      // Note: In production, send via body. Using query params as requested.
       const res = await fetch(`/api/ai/keys/gemini?teacher_id=Teacher&api_key=${encodeURIComponent(geminiKeyInput)}`, {
         method: 'POST'
       });
       if (!res.ok) throw new Error(await res.text());
-      geminiKeyInput = ''; // Clear input
+      geminiKeyInput = '';
       await fetchGeminiStatus();
       geminiNotice = "✅ 키가 안전하게 저장되었습니다.";
       showSettings = false;
