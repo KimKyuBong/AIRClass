@@ -1,20 +1,19 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
+  import { Room, RoomEvent } from 'livekit-client';
   
   let ws = null;
   let videoElement = null;
-  let pc = null; // WebRTC PeerConnection
+  let livekitRoom = null;
   let isConnected = false;
   let isVideoLoaded = false;
   let messages = [];
   let newMessage = '';
   let studentName = '';
   let isJoined = false;
-  let streamToken = '';
-  let webrtcUrl = '';
   let latencyMonitorInterval = null;
   let currentLatency = 0;
-  let nodeInfo = null; // 연결된 노드 정보
+  let nodeInfo = { mode: 'LiveKit', node_name: 'LiveKit', node_id: 'class' };
   let isPortraitVideo = false; // 세로 모드 영상 여부
   let videoContainerClass = ''; // 동적 컨테이너 클래스
   
@@ -43,8 +42,8 @@
   });
 
   onDestroy(() => {
-    if (pc) {
-      pc.close();
+    if (livekitRoom) {
+      livekitRoom.disconnect();
     }
     if (ws) {
       ws.close();
@@ -57,149 +56,77 @@
   async function joinClass() {
     if (!studentName.trim()) return;
     
-    localStorage.setItem('studentName', studentName);
-    
-    console.log('[Student] Joining class as:', studentName);
-    
-    // 1. 토큰 발급 받기
     try {
-      const response = await fetch(`/api/token?user_type=student&user_id=${encodeURIComponent(studentName)}`, {
-        method: 'POST'
+      // 1. Save name
+      localStorage.setItem('studentName', studentName);
+      console.log('[Student] Joining class as:', studentName);
+      
+      // 2. Get LiveKit token
+      console.log('[Student] Fetching token from:', `/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student`);
+      const response = await fetch(`/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student`, { 
+        method: 'POST' 
       });
-      const data = await response.json();
-      streamToken = data.token;
-      // 상대 경로인 경우 현재 origin 추가
-      if (data.webrtc_url) {
-        webrtcUrl = data.webrtc_url.startsWith('/') 
-          ? window.location.origin + data.webrtc_url 
-          : data.webrtc_url;
-      } else {
-        throw new Error('No webrtc_url in response');
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Token API failed (${response.status}): ${errorText}`);
       }
       
-      // 노드 정보 저장
-      nodeInfo = {
-        mode: data.mode || 'unknown',
-        node_name: data.node_name || 'unknown',
-        node_id: data.node_id || 'unknown',
-        host: data.host || window.location.hostname,
-        webrtc_port: data.webrtc_url ? data.webrtc_url.split(':')[2]?.split('/')[0] : 'unknown'
-      };
+      const { token, url } = await response.json();
       
-      console.log('[Student] Token received:', data);
-      console.log('[Student] WebRTC URL:', webrtcUrl);
-      console.log('[Student] Connected to node:', nodeInfo);
+      console.log('[Student] LiveKit token received');
+      console.log('[Student] LiveKit URL:', url);
       
-      // 2. Set joined state first to render the video element
+      // 3. Set joined state (triggers DOM update)
       isJoined = true;
-      
-      // 3. Wait for DOM to update
       await tick();
-      console.log('[Student] DOM updated, videoElement:', videoElement);
       
-      // 4. Configure video element for ultra-low latency
-      if (videoElement) {
-        configureVideoForLowLatency(videoElement);
-      }
+      // 4. Connect to LiveKit room
+      console.log('[Student] Creating LiveKit Room...');
+      livekitRoom = new Room();
+      console.log('[Student] Connecting to:', url);
+      await livekitRoom.connect(url, token);
+      console.log('[Student] ✅ Connected to LiveKit room');
       
-      // 5. WebSocket 연결
+      // 5. Subscribe to remote tracks
+      livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        console.log('[Student] Track subscribed:', track.kind, 'from', participant.identity);
+        if (track.kind === 'video') {
+          console.log('[Student] Attaching video track to element');
+          const element = track.attach();
+          element.id = 'remote-video';
+          videoElement.replaceWith(element);
+          videoElement = element;
+          isVideoLoaded = true;
+          configureVideoForLowLatency(videoElement);
+        }
+      });
+      
+      // Handle tracks from participants already in the room
+      console.log('[Student] Checking for existing participants...');
+      livekitRoom.remoteParticipants.forEach(participant => {
+        console.log('[Student] Found existing participant:', participant.identity);
+        participant.trackPublications.forEach(publication => {
+          if (publication.isSubscribed && publication.track?.kind === 'video') {
+            console.log('[Student] Attaching existing video track');
+            const element = publication.track.attach();
+            element.id = 'remote-video';
+            videoElement.replaceWith(element);
+            videoElement = element;
+            isVideoLoaded = true;
+            configureVideoForLowLatency(videoElement);
+          }
+        });
+      });
+      
+      // 6. Connect WebSocket for chat
       connectWebSocket();
       
-      // 6. WebRTC 초기화 (토큰 포함)
-      console.log('[Student] Initializing WebRTC...');
-      initializeWebRTC(webrtcUrl);
-      
     } catch (error) {
-      alert('토큰 발급 실패: ' + error.message);
-      console.error('Token error:', error);
+      console.error('[Student] Join failed:', error);
+      console.error('[Student] Error stack:', error.stack);
+      alert(`수업 참여 실패:\n\n${error.message}\n\n브라우저 콘솔(F12)에서 자세한 에러를 확인하세요.`);
     }
-  }
-
-  /**
-   * 브라우저 SDP를 MediaMTX 호환 형식으로 변환
-   * MediaMTX는 일부 브라우저 확장 속성을 지원하지 않으므로 제거
-   * curl로 성공한 minimal SDP 형식에 맞춤
-   */
-  function cleanSdpForMediaMTX(sdp) {
-    const lines = sdp.split('\r\n');
-    const cleaned = [];
-    let hasIceLite = false;
-    let hasSetup = false;
-    let bundleGroup = null;
-    
-    for (let line of lines) {
-      // 빈 줄은 유지
-      if (line.trim() === '') {
-        cleaned.push(line);
-        continue;
-      }
-      
-      // 필수 속성은 모두 유지: v=, o=, s=, t=, m=, c=, a=mid, a=recvonly, a=rtcp-mux
-      // a=rtpmap, a=fmtp, a=ice-ufrag, a=ice-pwd, a=fingerprint
-      
-      // 제거할 확장 속성들
-      const removePatterns = [
-        /^a=extmap-allow-mixed/,     // 확장 맵 혼합 허용
-        /^a=msid-semantic:/,         // MSID 시맨틱
-        /^a=extmap:/,                // 확장 맵 (일부는 유지해야 할 수도 있음)
-      ];
-      
-      let shouldRemove = false;
-      for (let pattern of removePatterns) {
-        if (pattern.test(line)) {
-          shouldRemove = true;
-          break;
-        }
-      }
-      
-      // BUNDLE 그룹은 첫 번째만 유지
-      if (line.startsWith('a=group:BUNDLE')) {
-        if (!bundleGroup) {
-          bundleGroup = line;
-          cleaned.push(line);
-        }
-        shouldRemove = true;
-      }
-      
-      // ice-lite 확인 (서버가 ice-lite를 사용하는 경우)
-      if (line.startsWith('a=ice-lite')) {
-        hasIceLite = true;
-      }
-      
-      // setup 확인
-      if (line.startsWith('a=setup:')) {
-        hasSetup = true;
-        // setup:active로 강제 설정 (클라이언트는 active여야 함)
-        if (!line.includes('active')) {
-          line = 'a=setup:active';
-        }
-      }
-      
-      if (!shouldRemove) {
-        cleaned.push(line);
-      }
-    }
-    
-    // setup이 없으면 추가 (클라이언트는 active여야 함)
-    if (!hasSetup) {
-      // 마지막 m= 라인 뒤에 추가
-      for (let i = cleaned.length - 1; i >= 0; i--) {
-        if (cleaned[i].startsWith('m=')) {
-          cleaned.splice(i + 1, 0, 'a=setup:active');
-          break;
-        }
-      }
-    }
-    
-    // SDP를 다시 조합
-    let result = cleaned.join('\r\n');
-    
-    // 마지막에 빈 줄이 없으면 추가 (표준 SDP 형식)
-    if (!result.endsWith('\r\n')) {
-      result += '\r\n';
-    }
-    
-    return result;
   }
 
   // Configure video element for ultra-low latency
@@ -259,220 +186,6 @@
     }, 50); // Check every 50ms (increased from 100ms) for faster response
   }
 
-  async function initializeWebRTC(whepUrl, retryCount = 0) {
-    console.log('[Student] initializeWebRTC called with URL:', whepUrl, 'retry:', retryCount);
-    
-    if (!videoElement) {
-      console.error('[Student] videoElement not found! Retry count:', retryCount);
-      
-      // Retry up to 10 times with 200ms delay
-      if (retryCount < 10) {
-        setTimeout(() => initializeWebRTC(whepUrl, retryCount + 1), 200);
-        return;
-      } else {
-        console.error('[Student] Failed to get videoElement after 10 retries');
-        return;
-      }
-    }
-
-    console.log('[Student] videoElement exists:', videoElement);
-    console.log('[Student] Initializing WebRTC PeerConnection...');
-
-    try {
-      // Create RTCPeerConnection with ultra-low latency settings
-      pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' }
-        ],
-        // Optimize for lowest latency
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 0  // Don't pre-gather candidates
-      });
-
-      // Handle incoming tracks (video/audio from server)
-      pc.ontrack = (event) => {
-        console.log('[Student] 🎥 Received track:', {
-          kind: event.track.kind,
-          id: event.track.id,
-          readyState: event.track.readyState,
-          muted: event.track.muted,
-          enabled: event.track.enabled,
-          streams: event.streams.length
-        });
-        
-        event.track.onended = () => {
-          console.log('[Student] ❌ Track ended:', event.track.kind);
-        };
-        
-        event.track.onmute = () => {
-          console.log('[Student] 🔇 Track muted:', event.track.kind);
-        };
-        
-        event.track.onunmute = () => {
-          console.log('[Student] 🔊 Track unmuted:', event.track.kind);
-          // Try to play when track unmutes
-          if (videoElement && videoElement.srcObject) {
-            console.log('[Student] 🎬 Attempting playback after unmute...');
-            videoElement.play().catch(err => console.warn('[Student] Playback attempt:', err.message));
-          }
-        };
-        
-        // Only set srcObject if we have a stream
-        if (event.streams && event.streams.length > 0) {
-          if (!videoElement.srcObject) {
-            videoElement.srcObject = event.streams[0];
-            console.log('[Student] ✅ Set video srcObject to stream, stream active:', event.streams[0].active);
-            
-            // Show video immediately when we get the first track
-            isVideoLoaded = true;
-            
-            // Try to play immediately with aggressive retry
-            setTimeout(() => {
-              console.log('[Student] 🎬 Attempting immediate playback...');
-              videoElement.play()
-                .then(() => {
-                  console.log('[Student] ▶️ Video playback started successfully');
-                })
-                .catch(err => {
-                  console.warn('[Student] ⚠️ Playback failed:', err.message);
-                  // Retry after a short delay
-                  setTimeout(() => {
-                    videoElement.play().catch(e => console.warn('[Student] Retry failed:', e.message));
-                  }, 100);
-                });
-            }, 50); // Immediate attempt after 50ms
-          }
-          
-          // Log stream tracks
-          event.streams[0].getTracks().forEach(track => {
-            console.log('[Student] Stream track:', {
-              kind: track.kind,
-              id: track.id,
-              readyState: track.readyState,
-              enabled: track.enabled,
-              muted: track.muted
-            });
-          });
-        }
-      };
-
-      // Handle ICE connection state changes
-      pc.oniceconnectionstatechange = () => {
-        console.log('[Student] ICE connection state:', pc.iceConnectionState);
-        
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-          console.log('[Student] 🎉 ICE connection established!');
-          // Try to play when connection is established
-          if (videoElement && videoElement.srcObject) {
-            videoElement.play().catch(err => console.warn('[Student] Playback after ICE:', err.message));
-          }
-        }
-        
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-          console.log('[Student] Connection failed, retrying in 3 seconds...');
-          setTimeout(() => initializeWebRTC(whepUrl), 3000);
-        }
-      };
-
-      // Handle ICE gathering state
-      pc.onicegatheringstatechange = () => {
-        console.log('[Student] ICE gathering state:', pc.iceGatheringState);
-      };
-
-      // Handle ICE candidates
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('[Student] ICE candidate:', event.candidate.candidate);
-        } else {
-          console.log('[Student] ICE gathering complete');
-        }
-      };
-
-      // Handle connection state
-      pc.onconnectionstatechange = () => {
-        console.log('[Student] Connection state:', pc.connectionState);
-      };
-
-      // Add transceiver to receive video with ultra-low latency settings
-      const videoTransceiver = pc.addTransceiver('video', { 
-        direction: 'recvonly'
-      });
-      const audioTransceiver = pc.addTransceiver('audio', { 
-        direction: 'recvonly'
-      });
-      console.log('[Student] 📡 Added transceivers - video:', videoTransceiver.mid, 'audio:', audioTransceiver.mid);
-
-      // Create offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      console.log('[Student] Created offer, SDP length:', offer.sdp.length);
-      console.log('[Student] SDP preview:', offer.sdp.substring(0, 500));
-      
-      // SDP를 MediaMTX 호환 형식으로 변환
-      const cleanedSdp = cleanSdpForMediaMTX(offer.sdp);
-      console.log('[Student] Cleaned SDP length:', cleanedSdp.length);
-      console.log('[Student] Cleaned SDP preview:', cleanedSdp.substring(0, 500));
-
-      console.log('[Student] Sending cleaned offer to WHEP endpoint:', whepUrl);
-
-      // Send offer to WHEP endpoint with JWT token
-      const response = await fetch(whepUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/sdp',
-          'Authorization': `Bearer ${streamToken}`
-        },
-        body: cleanedSdp
-      });
-
-      if (!response.ok) {
-        throw new Error(`WHEP request failed: ${response.status} ${response.statusText}`);
-      }
-
-      // Get answer from server
-      const answerSdp = await response.text();
-      console.log('[Student] 📥 Received answer from server, length:', answerSdp.length);
-      console.log('[Student] Answer SDP preview:', answerSdp.substring(0, 200));
-      // 디버깅: 서버 ICE 후보(포트) 확인
-      const candLines = answerSdp.split('\r\n').filter(l => l.startsWith('a=candidate:') || l.startsWith('c='));
-      if (candLines.length) console.log('[Student] Server ICE (c= / a=candidate):', candLines.slice(0, 10));
-
-      await pc.setRemoteDescription({
-        type: 'answer',
-        sdp: answerSdp
-      });
-
-      console.log('[Student] ✅ WebRTC signaling complete! Waiting for ICE connection...');
-      
-      // Log current transceivers after remote description is set
-      pc.getTransceivers().forEach((transceiver, index) => {
-        console.log(`[Student] Transceiver ${index}:`, {
-          mid: transceiver.mid,
-          direction: transceiver.direction,
-          currentDirection: transceiver.currentDirection,
-          receiver: {
-            track: transceiver.receiver.track ? {
-              kind: transceiver.receiver.track.kind,
-              id: transceiver.receiver.track.id,
-              readyState: transceiver.receiver.track.readyState
-            } : null
-          }
-        });
-      });
-
-    } catch (error) {
-      console.error('[Student] WebRTC error:', error);
-      if (retryCount < 5) {
-        console.log('[Student] Retrying WebRTC connection in 3 seconds...');
-        setTimeout(() => initializeWebRTC(whepUrl, retryCount + 1), 3000);
-      } else {
-        alert('WebRTC 연결 실패: ' + error.message);
-      }
-    }
-  }
-
   function connectWebSocket() {
     ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/student?name=${encodeURIComponent(studentName)}`);
     
@@ -511,7 +224,7 @@
 
   function leaveClass() {
     if (ws) ws.close();
-    if (pc) pc.close();
+    if (livekitRoom) livekitRoom.disconnect();
     if (latencyMonitorInterval) clearInterval(latencyMonitorInterval);
     isJoined = false;
     isConnected = false;
@@ -609,6 +322,8 @@
                 {/if}
               {:else if nodeInfo.mode === 'main'}
                 메인 노드: {nodeInfo.node_name}
+              {:else if nodeInfo.mode === 'LiveKit'}
+                {nodeInfo.node_name}
               {:else}
                 {nodeInfo.node_name} ({nodeInfo.mode})
               {/if}
@@ -634,7 +349,7 @@
         <!-- Teacher's Screen -->
         <div class="lg:col-span-2">
           <div class="bg-white rounded-lg shadow p-4">
-            <h2 class="text-lg font-semibold mb-4 text-gray-800">👨‍🏫 선생님 화면 (WebRTC 초저지연)</h2>
+            <h2 class="text-lg font-semibold mb-4 text-gray-800">👨‍🏫 선생님 화면 (LiveKit 초저지연)</h2>
             <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative {videoContainerClass}">
               <!-- Video element with ultra-low latency settings - ALWAYS visible -->
               <!-- svelte-ignore a11y-media-has-caption -->
@@ -653,7 +368,7 @@
                   <div>
                     <div class="text-4xl mb-2">⏳</div>
                     <p>선생님 화면을 기다리는 중...</p>
-                    <p class="text-sm mt-2">WebRTC 연결 중</p>
+                    <p class="text-sm mt-2">LiveKit 연결 중</p>
                   </div>
                 </div>
               {/if}

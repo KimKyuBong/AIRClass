@@ -3,12 +3,13 @@ Utilities Package
 백엔드 유틸리티 모듈들
 """
 
-from .mediamtx import (
-    start_mediamtx,
-    stop_mediamtx,
-    is_mediamtx_running,
-    get_mediamtx_pid,
-)
+# MediaMTX removed
+# from .mediamtx import (
+#     start_mediamtx,
+#     stop_mediamtx,
+#     is_mediamtx_running,
+#     get_mediamtx_pid,
+# )
 
 from .jwt_auth import (
     generate_stream_token,
@@ -40,11 +41,11 @@ from .websocket import (
 )
 
 __all__ = [
-    # MediaMTX
-    "start_mediamtx",
-    "stop_mediamtx",
-    "is_mediamtx_running",
-    "get_mediamtx_pid",
+    # MediaMTX removed
+    # "start_mediamtx",
+    # "stop_mediamtx",
+    # "is_mediamtx_running",
+    # "get_mediamtx_pid",
     # JWT Auth
     "generate_stream_token",
     "verify_token",

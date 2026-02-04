@@ -24,46 +24,13 @@ if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "localhost" ] || [ "$SERVER_IP" = "12
     fi
 fi
 
-# Main 노드인 경우
-if [ "$MODE" = "main" ]; then
-    echo "🔍 Configuring WebRTC ICE candidates for Main node..."
-    # Main 노드도 ICE candidate에 IP 추가 필요
-    sed -i "s|webrtcAdditionalHosts: \[\]|webrtcAdditionalHosts: ['${SERVER_IP}']|g" mediamtx-main.yml
-    echo "📝 Updated Main MediaMTX config with ICE candidate: ${SERVER_IP}"
-fi
+# MediaMTX logic removed (Main/Sub configuration)
+# if [ "$MODE" = "main" ]; then ... fi
+# if [ "$MODE" = "sub" ]; then ... fi
 
-# Sub 노드인 경우, 템플릿에서 mediamtx-sub.yml 생성 (포트/호스트 확실 반영)
-if [ "$MODE" = "sub" ]; then
-    echo "🔍 Generating mediamtx-sub.yml from template..."
-    WEBRTC_PORT="${WEBRTC_UDP_PORT:-8189}"
-    sed -e "s/__WEBRTC_UDP_PORT__/${WEBRTC_PORT}/g" -e "s/__SERVER_IP__/${SERVER_IP}/g" \
-        mediamtx-sub.template.yml > mediamtx-sub.yml
-    echo "✅ webrtcLocalUDPAddress/TCP: :${WEBRTC_PORT}, webrtcAdditionalHosts: ${SERVER_IP}"
-    grep -E "webrtcLocal|webrtcAdditional" mediamtx-sub.yml || true
-fi
-
-# MediaMTX 시작 (백그라운드)
-echo "📡 Starting MediaMTX..."
-if [ "$MODE" = "main" ]; then
-    echo "   Using Main configuration (RTMP Proxy enabled)"
-    CONFIG_FILE="mediamtx-main.yml"
-elif [ "$MODE" = "sub" ]; then
-    echo "   Using Sub configuration (Stream Relay enabled)"
-    # 환경 변수로 ICE 포트 강제
-    export MTX_WEBRTCLOCALUDPADDRESS=":${WEBRTC_UDP_PORT:-8189}"
-    export MTX_WEBRTCLOCALTCPADDRESS=":${WEBRTC_UDP_PORT:-8189}"
-    CONFIG_FILE="mediamtx-sub.yml"
-else
-    echo "   Using Standard configuration"
-    CONFIG_FILE="mediamtx.yml"
-fi
-
-./mediamtx "$CONFIG_FILE" &
-MEDIAMTX_PID=$!
-echo "MediaMTX PID: $MEDIAMTX_PID"
-
-# MediaMTX가 준비될 때까지 대기
-sleep 3
+# MediaMTX 시작 logic removed
+# echo "📡 Starting MediaMTX..."
+# ./mediamtx "$CONFIG_FILE" &
 
 # FastAPI 시작 (포그라운드로 실행)
 echo "🐍 Starting FastAPI in foreground..."
