@@ -17,9 +17,10 @@ from datetime import datetime, timedelta, UTC
 
 # Utils
 from utils import (
-    start_mediamtx,
-    stop_mediamtx,
-    is_mediamtx_running,
+    # MediaMTX logic removed
+    # start_mediamtx,
+    # stop_mediamtx,
+    # is_mediamtx_running,
     generate_stream_token,
     verify_token,
     get_local_ip,
@@ -57,10 +58,28 @@ async def lifespan(app: FastAPI):
     """서버 라이프사이클 관리 (startup & shutdown)"""
     # Startup
     logger.info("🚀 Starting AIRClass Backend Server...")
-    
-    # 먼저 백엔드 서비스들을 초기화
+
+    # 1. 클러스터 모드 초기화
     await init_cluster_mode()
 
+    # 2. LiveKit 서버 시작
+    try:
+        from core.livekit_manager import init_livekit_manager
+        from config import MODE, NODE_NAME, REDIS_URL, LIVEKIT_BINARY
+
+        await init_livekit_manager(
+            node_id=NODE_NAME,
+            mode=MODE,
+            redis_url=REDIS_URL,
+            livekit_binary=LIVEKIT_BINARY,
+        )
+        logger.info("✅ LiveKit server initialized")
+    except Exception as e:
+        logger.error(f"❌ LiveKit server initialization failed: {e}")
+        # LiveKit 실패 시 서버 시작 중단 (중요 서비스이므로)
+        raise
+
+    # 3. 백엔드 서비스들 초기화
     try:
         from core.cache import init_cache
 
@@ -121,19 +140,22 @@ async def lifespan(app: FastAPI):
     local_ip = get_local_ip()
     print_qr_code(local_ip)
 
-    # 백엔드가 완전히 시작된 후 MediaMTX 시작
-    # MediaMTX가 인증 요청을 보낼 때 백엔드가 준비되어 있어야 함
-    import asyncio
-    await asyncio.sleep(0.5)  # FastAPI가 완전히 시작될 때까지 짧은 대기
-    start_mediamtx()
-    logger.info("✅ MediaMTX started after backend initialization")
-
     yield  # 서버 실행
 
     # Shutdown
     logger.info("🛑 Shutting down AIRClass Backend Server...")
+
+    # 1. LiveKit 서버 종료
+    try:
+        from core.livekit_manager import shutdown_livekit_manager
+
+        await shutdown_livekit_manager()
+        logger.info("✅ LiveKit server stopped")
+    except Exception as e:
+        logger.error(f"❌ LiveKit server shutdown failed: {e}")
+
+    # 2. 클러스터 종료
     await shutdown_cluster()
-    stop_mediamtx()
 
 
 app = FastAPI(
@@ -239,14 +261,6 @@ except Exception as e:
     logger.warning(f"⚠️ WebSocket router import failed: {e}")
 
 try:
-    from routers.mediamtx_auth import router as mediamtx_auth_router
-
-    app.include_router(mediamtx_auth_router)
-    logger.info("✅ MediaMTX Auth router included")
-except Exception as e:
-    logger.warning(f"⚠️ MediaMTX Auth router import failed: {e}")
-
-try:
     from routers.system import router as system_router
 
     app.include_router(system_router)
@@ -262,33 +276,47 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Monitoring router import failed: {e}")
 
+# MediaMTX routers removed
+# try:
+#     from routers.mediamtx_auth import router as mediamtx_auth_router
+#     app.include_router(mediamtx_auth_router)
+# except Exception as e:
+#     logger.warning(f"⚠️ MediaMTX Auth router import failed: {e}")
+
+# try:
+#     from routers.mediamtx_proxy import router as mediamtx_proxy_router
+#     app.include_router(mediamtx_proxy_router)
+# except Exception as e:
+#     logger.warning(f"⚠️ MediaMTX Proxy router import failed: {e}")
+
 try:
-    from routers.mediamtx_proxy import router as mediamtx_proxy_router
+    from routers.livekit import router as livekit_router
 
-    app.include_router(mediamtx_proxy_router)
-    logger.info("✅ MediaMTX Proxy router included")
+    app.include_router(livekit_router)
+    logger.info("✅ LiveKit router included")
 except Exception as e:
-    logger.warning(f"⚠️ MediaMTX Proxy router import failed: {e}")
+    logger.warning(f"⚠️ LiveKit router import failed: {e}")
 
-mediamtx_process = None
+# MediaMTX process variable removed
+# mediamtx_process = None
 
 
 # WebSocket connection manager (from utils)
 manager = get_connection_manager()
 
 
-# Note: /api/screen endpoint removed - Android app now sends RTMP directly to MediaMTX
-# MediaMTX converts RTMP to WebRTC automatically
+# Note: /api/screen endpoint removed - Now switching to LiveKit
+# MediaMTX logic was: Android app sends RTMP directly to MediaMTX
 
 
 if __name__ == "__main__":
     import uvicorn
 
     print("=" * 60)
-    print("🎓 AIRClass Backend Server v2.0.0")
+    print("🎓 AIRClass Backend Server v2.0.0 (LiveKit Mode)")
     print("=" * 60)
-    print("📡 RTMP: rtmp://localhost:1935/live/stream")
-    print("🎬 WebRTC: http://localhost:8889/live/stream/whep")
+    # print("📡 RTMP: rtmp://localhost:1935/live/stream")
+    # print("🎬 WebRTC: http://localhost:8889/live/stream/whep")
     print("🌐 API: http://localhost:8000")
     print("🖥️  Frontend: http://localhost:5173")
     print("=" * 60)
@@ -301,6 +329,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=False,  # MediaMTX 프로세스 관리 때문에 reload 비활성화
+        reload=False,
         log_level="info",
     )

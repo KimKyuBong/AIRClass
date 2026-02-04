@@ -25,12 +25,28 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_MINUTES = 60
 
 # ============================================
-# MediaMTX Configuration
+# MediaMTX Configuration (Removed - Switched to LiveKit)
 # ============================================
-RTMP_PORT = int(os.getenv("RTMP_PORT", "1935"))
-WEBRTC_PORT = int(os.getenv("WEBRTC_PORT", "8889"))
-MEDIAMTX_API_PORT = 9997
-MEDIAMTX_API_URL = f"http://127.0.0.1:{MEDIAMTX_API_PORT}"
+# RTMP_PORT = int(os.getenv("RTMP_PORT", "1935"))
+# WEBRTC_PORT = int(os.getenv("WEBRTC_PORT", "8889"))
+# MEDIAMTX_API_PORT = 9997
+# MEDIAMTX_API_URL = f"http://127.0.0.1:{MEDIAMTX_API_PORT}"
+
+# ============================================
+# LiveKit Configuration
+# ============================================
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "AIRClass2025DevKey123456789ABC")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "AIRclass2025DevSecretXYZ987654321")
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")  # 컨테이너 내부 주소
+
+# LiveKit 바이너리 경로 (PATH에 있으면 "livekit-server")
+LIVEKIT_BINARY = os.getenv("LIVEKIT_BINARY", "livekit-server")
+
+# 포트 설정 (노드별로 자동 계산됨)
+# main: 7880, node-1: 7890, node-2: 7900, ...
+LIVEKIT_PORT = int(os.getenv("LIVEKIT_PORT", "7880"))
+LIVEKIT_RTC_PORT_START = int(os.getenv("LIVEKIT_RTC_PORT_START", "50000"))
+LIVEKIT_RTC_PORT_END = int(os.getenv("LIVEKIT_RTC_PORT_END", "50020"))
 
 # ============================================
 # Cluster Configuration

@@ -1,13 +1,16 @@
-# AIRClass Docker Compose - Main-Sub Architecture with Redis
+# AIRClass Docker Compose - FastAPI-controlled LiveKit Architecture
+# 각 노드(main/sub)가 FastAPI + LiveKit을 함께 실행
+# FastAPI가 노드 역할에 따라 LiveKit 설정을 동적으로 생성/관리
+#
 # 사용법:
-#   기본 실행 (Main 1대, Sub 3대): docker-compose up
-#   같은 PC에서 여러 인스턴스: PORT_OFFSET=100 ./scripts/gen-port-range.sh >> .env && docker-compose up
+#   기본 실행 (Main 1대): docker-compose up main frontend mongodb redis
+#   Sub 노드 추가: docker-compose up -d sub-1
 #   종료: docker-compose down
 #
-# 포트 범위 (같은 컴퓨터에서 여러 Main/Sub 세트 실행 시):
-#   .env에 PORT_OFFSET=0 (기본)이면 8000,1935,8889,8189(Main), 8001~8003,8890~8892,8190~8192(Sub)
-#   PORT_OFFSET=100 이면 8100,2035,8989,8289(Main), 8101~8103,8990~8992,8290~8292(Sub)
-#   생성: ./scripts/gen-port-range.sh [OFFSET]  → .env에 붙여넣거나 export 후 사용
+# 포트 범위:
+#   Main Node - FastAPI: 8000, LiveKit: 7880, RTC: 50000-50020
+#   Sub Node 1 - FastAPI: 8001, LiveKit: 7890, RTC: 51000-51020
+#   Sub Node 2 - FastAPI: 8002, LiveKit: 7900, RTC: 52000-52020
 
 version: '3.8'
 
@@ -63,8 +66,8 @@ services:
       - "airclass.role=redis"
 
   # ============================================
-  # Main Node - RTMP 수신, 녹화, 클러스터 관리 (스트리밍 배포 안 함)
-  # Sub 노드들이 Main에서 스트림을 Pull하여 학생들에게 배포
+  # Main Node - FastAPI + LiveKit (통합 노드)
+  # FastAPI가 LiveKit 서버를 subprocess로 실행/관리
   # ============================================
   main:
     build:
@@ -72,24 +75,26 @@ services:
       dockerfile: Dockerfile
     container_name: airclass-main-node
     environment:
-      # 기본 설정
+      # 클러스터 설정
       MODE: main
       NODE_NAME: main
       NODE_HOST: main
       NODE_PORT: 8000
-      # 외부(호스트) API 포트 - mDNS/자동검색에 광고용 (포트 범위 사용 시 필수)
       MAIN_API_PORT: ${MAIN_API_PORT:-8000}
       
-      # 스트리밍 설정
-      RTMP_PORT: 1935
-      WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8189
-      MEDIAMTX_API_URL: http://127.0.0.1:9997
+      # LiveKit 설정
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-AIRClass2025DevKey123456789ABC}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-AIRclass2025DevSecretXYZ987654321}
+      LIVEKIT_URL: ws://localhost:7880  # 컨테이너 내부 주소
+      LIVEKIT_BINARY: /usr/local/bin/livekit-server
+      LIVEKIT_PORT: 7880
+      LIVEKIT_RTC_PORT_START: 50000
+      LIVEKIT_RTC_PORT_END: 50020
       
-      # 녹화 설정 (Main의 핵심 역할)
+      # 녹화 설정
       RECORDING_ENABLED: "true"
       RECORDING_DIR: /recordings
-      SCREENSHOT_INTERVAL: 10  # 10초마다 스크린샷
+      SCREENSHOT_INTERVAL: 10
       
       # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
@@ -99,24 +104,20 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       SERVER_IP: ${SERVER_IP:-127.0.0.1}
       
-      # Redis 연결
+      # Redis & MongoDB
       REDIS_URL: redis://redis:6379
-      
-      # MongoDB 연결
       MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
       
       # 최대 연결 수 (Main은 제한 없음)
       MAX_CONNECTIONS: 0
     ports:
-      - "${MAIN_API_PORT:-8000}:8000"       # API
-      - "${MAIN_RTMP_PORT:-1935}:1935"      # RTMP (Android 앱용)
-      - "${MAIN_WEBRTC_HTTP_PORT:-8889}:8889"   # WebRTC HTTP
-      - "${MAIN_WEBRTC_UDP_PORT:-8189}:8189/udp"   # WebRTC ICE UDP
-      - "${MAIN_WEBRTC_UDP_PORT:-8189}:8189/tcp"   # WebRTC ICE TCP (fallback)
+      - "${MAIN_API_PORT:-8000}:8000"       # FastAPI
+      - "${MAIN_LIVEKIT_PORT:-7880}:7880"   # LiveKit HTTP/WebSocket
+      - "${MAIN_RTC_PORT_START:-50000}-${MAIN_RTC_PORT_END:-50020}:50000-50020/udp"  # LiveKit RTC
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - recordings:/recordings  # 녹화 파일 저장
-      - screenshots:/screenshots  # 스크린샷 저장
+      - recordings:/recordings
+      - screenshots:/screenshots
     networks:
       - airclass-network
     depends_on:
@@ -133,11 +134,12 @@ services:
     restart: unless-stopped
     labels:
       - "airclass.role=main"
+      - "airclass.livekit=true"
 
 
   # ============================================
-  # Sub Nodes - Main에서 스트림 Pull → 학생들에게 WebRTC 배포
-  # 각 Sub 노드: 150명 수용, Main+Sub 페어로 배포, Sub만 수평 확장
+  # Sub Node 1 - FastAPI + LiveKit (통합 노드)
+  # Main 노드에 자동 등록하여 부하 분산
   # ============================================
   sub-1:
     build:
@@ -145,90 +147,24 @@ services:
       dockerfile: Dockerfile
     container_name: airclass-sub-1
     environment:
+      # 클러스터 설정
       MODE: sub
-      MAIN_NODE_URL: http://main:8000
-      NODE_NAME: sub-1
+      NODE_NAME: node-1
       NODE_HOST: sub-1
       NODE_PORT: 8000
-      NODE_SEQUENTIAL: 1
-      
-      # 스트리밍 설정
-      WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8190
-      WEBRTC_EXTERNAL_PORT: 8890
-      MEDIAMTX_API_URL: http://127.0.0.1:9997
-      
-      # Main 노드에서 스트림 Pull (RTMP/WebRTC)
-      STREAM_SOURCE: rtmp://main:1935/live
-      
-      # Redis 연결
-      REDIS_URL: redis://redis:6379
-      
-      # MongoDB 연결
-      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
-      
-      # 보안 설정
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
-      
-      # 네트워크 설정
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-127.0.0.1}
-      
-      # Sub 노드 수용 인원
-      MAX_CONNECTIONS: 150
-    ports:
-      - "${SUB1_API_PORT:-8001}:8000"       # API
-      - "${SUB1_WEBRTC_HTTP_PORT:-8890}:8889"   # WebRTC HTTP
-      - "${SUB1_WEBRTC_UDP_PORT:-8190}:8190/udp"   # WebRTC ICE UDP
-      - "${SUB1_WEBRTC_UDP_PORT:-8190}:8190/tcp"   # WebRTC ICE TCP (fallback)
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - recordings:/recordings
-      - screenshots:/screenshots
-    networks:
-      - airclass-network
-    depends_on:
-      redis:
-        condition: service_healthy
-      main:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      - "airclass.role=sub"
-
-  sub-2:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: airclass-sub-2
-    environment:
-      MODE: sub
       MAIN_NODE_URL: http://main:8000
-      NODE_NAME: sub-2
-      NODE_HOST: sub-2
-      NODE_PORT: 8000
-      NODE_SEQUENTIAL: 2
       
-      # 스트리밍 설정
-      WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8191
-      WEBRTC_EXTERNAL_PORT: 8891
-      MEDIAMTX_API_URL: http://127.0.0.1:9997
+      # LiveKit 설정
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-AIRClass2025DevKey123456789ABC}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-AIRclass2025DevSecretXYZ987654321}
+      LIVEKIT_URL: ws://sub-1:7890
+      LIVEKIT_BINARY: /usr/local/bin/livekit-server
+      LIVEKIT_PORT: 7890
+      LIVEKIT_RTC_PORT_START: 51000
+      LIVEKIT_RTC_PORT_END: 51020
       
-      # Main 노드에서 스트림 Pull (RTMP/WebRTC)
-      STREAM_SOURCE: rtmp://main:1935/live
-      
-      # Redis 연결
+      # Redis & MongoDB
       REDIS_URL: redis://redis:6379
-      
-      # MongoDB 연결
       MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
       
       # 보안 설정
@@ -242,10 +178,9 @@ services:
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
     ports:
-      - "${SUB2_API_PORT:-8002}:8000"       # API
-      - "${SUB2_WEBRTC_HTTP_PORT:-8891}:8889"   # WebRTC HTTP
-      - "${SUB2_WEBRTC_UDP_PORT:-8191}:8191/udp"   # WebRTC ICE UDP
-      - "${SUB2_WEBRTC_UDP_PORT:-8191}:8191/tcp"   # WebRTC ICE TCP (fallback)
+      - "${SUB1_API_PORT:-8001}:8000"        # FastAPI
+      - "${SUB1_LIVEKIT_PORT:-7890}:7890"    # LiveKit HTTP/WebSocket
+      - "${SUB1_RTC_PORT_START:-51000}-${SUB1_RTC_PORT_END:-51020}:51000-51020/udp"  # LiveKit RTC
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - recordings:/recordings
@@ -266,75 +201,8 @@ services:
     restart: unless-stopped
     labels:
       - "airclass.role=sub"
+      - "airclass.livekit=true"
 
-  sub-3:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: airclass-sub-3
-    environment:
-      MODE: sub
-      MAIN_NODE_URL: http://main:8000
-      NODE_NAME: sub-3
-      NODE_HOST: sub-3
-      NODE_PORT: 8000
-      NODE_SEQUENTIAL: 3
-      
-      # 스트리밍 설정
-      WEBRTC_PORT: 8889
-      WEBRTC_UDP_PORT: 8192
-      WEBRTC_EXTERNAL_PORT: 8892
-      MEDIAMTX_API_URL: http://127.0.0.1:9997
-      
-      # Main 노드에서 스트림 Pull (RTMP/WebRTC)
-      STREAM_SOURCE: rtmp://main:1935/live
-      
-      # Redis 연결
-      REDIS_URL: redis://redis:6379
-      
-      # MongoDB 연결
-      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
-      
-      # 보안 설정
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
-      
-      # 네트워크 설정
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-127.0.0.1}
-      
-      # Sub 노드 수용 인원
-      MAX_CONNECTIONS: 150
-    ports:
-      - "${SUB3_API_PORT:-8003}:8000"       # API
-      - "${SUB3_WEBRTC_HTTP_PORT:-8892}:8889"   # WebRTC HTTP
-      - "${SUB3_WEBRTC_UDP_PORT:-8192}:8192/udp"   # WebRTC ICE UDP
-      - "${SUB3_WEBRTC_UDP_PORT:-8192}:8192/tcp"   # WebRTC ICE TCP (fallback)
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - recordings:/recordings
-      - screenshots:/screenshots
-    networks:
-      - airclass-network
-    depends_on:
-      redis:
-        condition: service_healthy
-      main:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      - "airclass.role=sub"
-
-
-  # ============================================
-  # Frontend - 사용자 인터페이스
-  # ============================================
   frontend:
     image: node:20-alpine
     container_name: airclass-frontend

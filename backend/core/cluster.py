@@ -62,9 +62,9 @@ class NodeInfo:
     node_id: str
     node_name: str
     host: str
-    port: int
-    rtmp_port: int
-    webrtc_port: int
+    port: int  # FastAPI 포트
+    livekit_port: int  # LiveKit HTTP 포트
+    livekit_ws_port: int  # LiveKit WebSocket 포트 (보통 같음)
     max_connections: int
     current_connections: int
     cpu_usage: float
@@ -86,15 +86,18 @@ class NodeInfo:
         return self.status == "healthy" and age < timedelta(seconds=30)
 
     @property
-    def rtmp_url(self) -> str:
-        return f"rtmp://{self.host}:{self.rtmp_port}/live/stream"
+    def livekit_url(self) -> str:
+        """LiveKit WebSocket URL"""
+        return f"ws://{self.host}:{self.livekit_port}"
 
     @property
-    def webrtc_url(self) -> str:
-        return f"http://{self.host}:{self.webrtc_port}/live/stream/whep"
+    def livekit_http_url(self) -> str:
+        """LiveKit HTTP API URL"""
+        return f"http://{self.host}:{self.livekit_port}"
 
     @property
     def api_url(self) -> str:
+        """FastAPI URL"""
         return f"http://{self.host}:{self.port}"
 
 
@@ -121,8 +124,8 @@ class ClusterManager:
         """Sub 노드 등록"""
         self.nodes[node.node_id] = node
         logger.info(f"✅ Node registered: {node.node_name} ({node.host}:{node.port})")
-        logger.info(f"   RTMP:   {node.rtmp_url}")
-        logger.info(f"   WebRTC: {node.webrtc_url}")
+        logger.info(f"   LiveKit WS:   {node.livekit_url}")
+        logger.info(f"   LiveKit HTTP: {node.livekit_http_url}")
         return True
 
     def unregister_node(self, node_id: str) -> bool:
@@ -314,36 +317,12 @@ class ClusterManager:
                 if self.main_node_id and self.main_node_id in self.nodes:
                     try:
                         main_node = self.nodes[self.main_node_id]
-                        logger.info(f"🔍 Updating main node stats via MediaMTX API")
-                        async with httpx.AsyncClient(
-                            timeout=2.0, follow_redirects=True
-                        ) as client:
-                            # MediaMTX API로 현재 연결 수 조회
-                            from config import MEDIAMTX_API_URL
+                        logger.info(f"🔍 Updating main node stats via LiveKit API")
 
-                            response = await client.get(
-                                f"{MEDIAMTX_API_URL}/v3/paths/list"
-                            )
-                            logger.info(
-                                f"📡 MediaMTX API response: {response.status_code}"
-                            )
-                            if response.status_code == 200:
-                                try:
-                                    data = response.json()
-                                    # readers 수를 합산 (readers는 리스트이므로 len() 사용)
-                                    total_readers = 0
-                                    if "items" in data:
-                                        for item in data["items"]:
-                                            readers = item.get("readers", [])
-                                            total_readers += len(readers)
-
-                                    main_node.current_connections = total_readers
-                                    main_node.last_heartbeat = datetime.now()
-                                    logger.info(
-                                        f"📊 Main node connections: {total_readers}"
-                                    )
-                                except Exception as json_error:
-                                    logger.error(f"❌ JSON parse error: {json_error}")
+                        # LiveKit 통계는 Sub 노드로부터 받으므로 여기서는 heartbeat만 갱신
+                        # (LiveKit API 호출 제거 - 불필요한 의존성)
+                        main_node.last_heartbeat = datetime.now()
+                        logger.info(f"📊 Main node heartbeat updated")
                     except Exception as e:
                         logger.error(f"⚠️ Failed to update main node stats: {e}")
 
@@ -548,8 +527,8 @@ async def init_cluster_mode():
             node_name=os.getenv("NODE_NAME", "main"),
             host=os.getenv("NODE_HOST", "10.100.0.146"),
             port=int(os.getenv("NODE_PORT", "8000")),
-            rtmp_port=int(os.getenv("RTMP_PORT", "1935")),
-            webrtc_port=int(os.getenv("WEBRTC_PORT", "8889")),
+            livekit_port=int(os.getenv("LIVEKIT_PORT", "7880")),
+            livekit_ws_port=int(os.getenv("LIVEKIT_PORT", "7880")),  # HTTP와 동일
             max_connections=int(os.getenv("MAX_CONNECTIONS", "150")),
             current_connections=0,
             cpu_usage=0.0,
@@ -618,8 +597,8 @@ async def init_cluster_mode():
             node_name=os.getenv("NODE_NAME", f"sub-{container_name}"),
             host=os.getenv("NODE_HOST", "localhost"),
             port=int(os.getenv("NODE_PORT", "8000")),
-            rtmp_port=int(os.getenv("RTMP_PORT", "1935")),
-            webrtc_port=int(os.getenv("WEBRTC_PORT", "8889")),
+            livekit_port=int(os.getenv("LIVEKIT_PORT", "7890")),
+            livekit_ws_port=int(os.getenv("LIVEKIT_PORT", "7890")),
             max_connections=int(os.getenv("MAX_CONNECTIONS", "150")),
             current_connections=0,
             cpu_usage=0.0,
