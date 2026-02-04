@@ -55,7 +55,7 @@ async def health_check():
         - stream_active: MediaMTX에서 스트림을 받고 있는지 여부
         - timestamp: 현재 시간
     """
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
 
     # MediaMTX API로 스트림 상태 확인
     stream_active = False
@@ -100,7 +100,7 @@ async def health_check():
 @router.get("/api/status")
 async def get_status():
     """현재 연결 상태 조회"""
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
 
     status_data = {
         "teacher_connected": manager.teacher is not None,

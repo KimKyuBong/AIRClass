@@ -10,8 +10,10 @@ from typing import Literal
 # ============================================
 # Mode Configuration
 # ============================================
-MODE: Literal["main", "sub", "standalone"] = os.getenv("MODE", "standalone")  # type: ignore
-NODE_NAME = os.getenv("NODE_NAME", "node")
+# Main: RTMP 수신, 로드 밸런싱, Sub 노드 관리
+# Sub: Main에서 RTSP 스트림 가져오기, WebRTC 서빙
+MODE: Literal["main", "sub"] = os.getenv("MODE", "main")  # type: ignore
+NODE_NAME = os.getenv("NODE_NAME", "main")
 NODE_HOST = os.getenv("NODE_HOST", "localhost")
 NODE_PORT = int(os.getenv("NODE_PORT", "8000"))
 

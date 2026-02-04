@@ -10,8 +10,8 @@ writeTimeout: 24h
 readBufferCount: 65536  # Increased to handle large SDP packets
 udpMaxPayloadSize: 1472  # Optimize for network MTU
 
-# RTMP 서버 활성화 (Android 앱으로부터 스트림 수신)
-rtmp: yes
+# RTMP 서버 비활성화 (WebRTC WHIP로 완전 전환)
+rtmp: no
 rtmpAddress: :1935
 
 # HLS 서버 비활성화 (Main는 프록시만 수행)

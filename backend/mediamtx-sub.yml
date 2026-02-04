@@ -33,11 +33,6 @@ paths:
     # WebRTC 활성화 (학생들이 WHEP로 시청)
     readUser: ''
     readPass: ''
-    
-    # Protocols
-    rtmpDisable: no
-    webrtcDisable: no
-    hlsDisable: no
 
 # WebRTC 설정
 webrtc: yes
@@ -50,7 +45,8 @@ webrtcLocalTCPAddress: ':8189'
 webrtcIPsFromInterfaces: no
 webrtcIPsFromInterfacesList: []
 webrtcAdditionalHosts: []
-webrtcICEServers: []
+webrtcICEServers:
+  - url: stun:stun.l.google.com:19302
 
 # RTMP 수신 (Main으로부터)
 rtmp: yes

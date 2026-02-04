@@ -11,6 +11,7 @@
   let messages = [];
   let newMessage = '';
   let webrtcUrl = '';
+  let streamToken = '';
   let latencyMonitorInterval = null;
   let currentLatency = 0;
   
@@ -308,6 +309,7 @@
       
       const data = await response.json();
       webrtcUrl = data.webrtc_url;
+      streamToken = data.token;
       
       // Proxy를 타도록 상대 경로로 변환 (HTTPS -> HTTP Mixed Content 방지)
       try {
@@ -588,11 +590,12 @@
 
       console.log('[Teacher] Sending cleaned offer to WHEP endpoint:', whepUrl);
 
-      // Send offer to WHEP endpoint
+      // Send offer to WHEP endpoint with JWT token
       const response = await fetch(whepUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/sdp'
+          'Content-Type': 'application/sdp',
+          'Authorization': `Bearer ${streamToken}`
         },
         body: cleanedSdp
       });

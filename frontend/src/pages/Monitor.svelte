@@ -8,6 +8,7 @@
   let isVideoLoaded = false;
   let error = null;
   let webrtcUrl = '';
+  let streamToken = '';
   let latencyMonitorInterval = null;
   let currentLatency = 0;
 
@@ -43,6 +44,7 @@
       
       const data = await response.json();
       webrtcUrl = data.webrtc_url;
+      streamToken = data.token;
       
       console.log('[Monitor] Token received:', data);
       console.log('[Monitor] WebRTC URL:', webrtcUrl);
@@ -233,7 +235,10 @@
 
       const response = await fetch(whepUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/sdp' },
+        headers: { 
+          'Content-Type': 'application/sdp',
+          'Authorization': `Bearer ${streamToken}`
+        },
         body: cleanedSdp
       });
 

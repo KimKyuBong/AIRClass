@@ -23,7 +23,7 @@ router = APIRouter(prefix="/cluster", tags=["cluster"])
 @router.post("/register")
 async def register_node(request: Request):
     """Sub 노드 등록 (HMAC 인증)"""
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
     if mode != "main":
         raise HTTPException(status_code=403, detail="Only main can register nodes")
 
@@ -69,7 +69,7 @@ async def register_node(request: Request):
 @router.post("/unregister")
 async def unregister_node(request: Request):
     """Sub 노드 등록 해제 (Main only)"""
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
     if mode != "main":
         raise HTTPException(status_code=403, detail="Only main can unregister nodes")
 
@@ -86,7 +86,7 @@ async def unregister_node(request: Request):
 @router.post("/stats")
 async def update_node_stats(request: Request):
     """노드 통계 업데이트 (Sub → Main, HMAC 인증)"""
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
     if mode != "main":
         raise HTTPException(status_code=403, detail="Only main can receive stats")
 
@@ -125,7 +125,7 @@ async def update_node_stats(request: Request):
 @router.get("/nodes")
 async def get_cluster_nodes():
     """클러스터 노드 목록 조회"""
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
     if mode != "main":
         raise HTTPException(status_code=403, detail="Only main has cluster info")
 

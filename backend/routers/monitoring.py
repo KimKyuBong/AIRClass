@@ -47,7 +47,7 @@ async def metrics():
     active_connections.labels(type="monitor").set(len(manager.monitors))
 
     # Update cluster metrics if in main mode
-    mode = os.getenv("MODE", "standalone")
+    mode = os.getenv("MODE", "main")
     if mode == "main" and cluster_manager:
         # Count nodes by status
         active_nodes = sum(
@@ -77,7 +77,7 @@ async def metrics():
 async def get_viewers():
     """Get current WebRTC viewers from MediaMTX with node distribution"""
     try:
-        mode = os.getenv("MODE", "standalone")
+        mode = os.getenv("MODE", "main")
         
         from config import MEDIAMTX_API_URL
 

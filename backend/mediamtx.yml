@@ -15,9 +15,9 @@ logFile: mediamtx.log
 
 # Timeout of read operations.
 # Increased to prevent disconnections from mobile devices
-readTimeout: 60s
+readTimeout: 24h
 # Timeout of write operations.
-writeTimeout: 10s
+writeTimeout: 24h
 # Size of the queue of outgoing packets.
 # Increased to prevent "write queue is full" errors with HLS
 writeQueueSize: 512
@@ -240,7 +240,8 @@ rtspAuthMethods: [basic]
 # Global settings -> RTMP server
 
 # Enable publishing and reading streams with the RTMP protocol.
-rtmp: yes
+# DISABLED: Migrated to WebRTC-only architecture for ultra-low latency
+rtmp: no
 # Address of the RTMP listener. This is needed only when encryption is "no" or "optional".
 rtmpAddress: :1935
 # Encrypt connections with TLS (RTMPS).

@@ -15,6 +15,11 @@
   let latencyMonitorInterval = null;
   let currentLatency = 0;
   let nodeInfo = null; // 연결된 노드 정보
+  let isPortraitVideo = false; // 세로 모드 영상 여부
+  let videoContainerClass = ''; // 동적 컨테이너 클래스
+  
+  // Reactive: isPortraitVideo 변경 시 videoContainerClass 자동 업데이트
+  $: videoContainerClass = isPortraitVideo ? 'portrait-video' : 'landscape-video';
 
   onMount(async () => {
     console.log('[Student] Component mounted');
@@ -58,12 +63,19 @@
     
     // 1. 토큰 발급 받기
     try {
-      const response = await fetch(`http://${window.location.hostname}:8000/api/token?user_type=student&user_id=${encodeURIComponent(studentName)}`, {
+      const response = await fetch(`/api/token?user_type=student&user_id=${encodeURIComponent(studentName)}`, {
         method: 'POST'
       });
       const data = await response.json();
       streamToken = data.token;
-      webrtcUrl = data.webrtc_url;
+      // 상대 경로인 경우 현재 origin 추가
+      if (data.webrtc_url) {
+        webrtcUrl = data.webrtc_url.startsWith('/') 
+          ? window.location.origin + data.webrtc_url 
+          : data.webrtc_url;
+      } else {
+        throw new Error('No webrtc_url in response');
+      }
       
       // 노드 정보 저장
       nodeInfo = {
@@ -202,6 +214,25 @@
     // Force immediate playback without buffering
     video.addEventListener('loadedmetadata', () => {
       console.log('[Student] Video metadata loaded, forcing immediate playback');
+      
+      // 비디오 크기 감지 및 aspect ratio 계산
+      const videoWidth = video.videoWidth;
+      const videoHeight = video.videoHeight;
+      const aspectRatio = videoWidth / videoHeight;
+      
+      console.log('[Student] Video dimensions:', videoWidth, 'x', videoHeight, 'aspect ratio:', aspectRatio.toFixed(2));
+      
+      // 세로 모드 판단 (높이가 너비보다 큰 경우)
+      isPortraitVideo = videoHeight > videoWidth;
+      
+      if (isPortraitVideo) {
+        console.log('[Student] 📱 Portrait mode detected - using cover for full screen');
+        videoContainerClass = 'portrait-video';
+      } else {
+        console.log('[Student] 🖥️ Landscape mode detected - using contain');
+        videoContainerClass = 'landscape-video';
+      }
+      
       video.play().catch(err => console.warn('[Student] Immediate play failed:', err.message));
     });
     
@@ -386,11 +417,12 @@
 
       console.log('[Student] Sending cleaned offer to WHEP endpoint:', whepUrl);
 
-      // Send offer to WHEP endpoint
+      // Send offer to WHEP endpoint with JWT token
       const response = await fetch(whepUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/sdp'
+          'Content-Type': 'application/sdp',
+          'Authorization': `Bearer ${streamToken}`
         },
         body: cleanedSdp
       });
@@ -487,6 +519,43 @@
   }
 </script>
 
+<style>
+  /* 기본 비디오 스타일 */
+  .video-stream {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  /* 가로 모드 비디오 (기본) */
+  .landscape-video .video-stream {
+    object-fit: contain; /* 전체를 보여주며 비율 유지 */
+  }
+
+  /* 세로 모드 비디오 - 화면에 꽉 차게 */
+  .portrait-video {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .portrait-video .video-stream {
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100%;
+    object-fit: cover; /* 화면을 꽉 채움 */
+  }
+
+  /* 반응형: 작은 화면에서는 세로 영상이 너비에 맞춰지도록 */
+  @media (max-width: 768px) {
+    .portrait-video .video-stream {
+      width: 100% !important;
+      height: auto !important;
+      max-height: 100%;
+    }
+  }
+</style>
+
 {#if !isJoined}
   <!-- Join Screen -->
   <div class="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-6">
@@ -566,16 +635,16 @@
         <div class="lg:col-span-2">
           <div class="bg-white rounded-lg shadow p-4">
             <h2 class="text-lg font-semibold mb-4 text-gray-800">👨‍🏫 선생님 화면 (WebRTC 초저지연)</h2>
-            <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative">
+            <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative {videoContainerClass}">
               <!-- Video element with ultra-low latency settings - ALWAYS visible -->
               <!-- svelte-ignore a11y-media-has-caption -->
               <video
                 bind:this={videoElement}
-                class="w-full h-full object-contain"
+                class="video-stream"
                 autoplay
+                muted
                 playsinline
                 disablepictureinpicture
-                style="object-fit: contain;"
               ></video>
               
               <!-- Loading overlay - shows on top when video not loaded -->

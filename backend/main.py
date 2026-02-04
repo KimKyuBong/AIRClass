@@ -262,6 +262,14 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Monitoring router import failed: {e}")
 
+try:
+    from routers.mediamtx_proxy import router as mediamtx_proxy_router
+
+    app.include_router(mediamtx_proxy_router)
+    logger.info("✅ MediaMTX Proxy router included")
+except Exception as e:
+    logger.warning(f"⚠️ MediaMTX Proxy router import failed: {e}")
+
 mediamtx_process = None
 
 

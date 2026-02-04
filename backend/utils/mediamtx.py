@@ -27,7 +27,7 @@ def start_mediamtx() -> None:
             mediamtx_binary = os.path.join(backend_dir, "mediamtx")
             
             # 모드에 따라 적절한 설정 파일 선택
-            mode = os.getenv("MODE", "standalone").lower()
+            mode = os.getenv("MODE", "main").lower()
             if mode == "main":
                 config_file = os.path.join(backend_dir, "mediamtx-main.yml")
             elif mode == "sub":

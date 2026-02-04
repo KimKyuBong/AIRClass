@@ -15,29 +15,30 @@ authHTTPExclude:
 
 pathDefaults:
   source: rtmp://localhost/live/relay
-  sourceOnDemand: no
+  sourceOnDemand: false
+
+# Global RTSP settings
+rtspTransport: tcp
+readTimeout: 20s
 
 paths:
   "live/stream":
-    source: rtmp://main:1935/live/stream
-    sourceOnDemand: no
-    sourceOnDemandStartTimeout: 10s
-    sourceOnDemandCloseAfter: 10s
+    source: rtsp://main:8554/live/stream
+    sourceProtocol: tcp  # Force TCP to avoid UDP packet loss
+    sourceOnDemand: no   # Keep connection alive always
+    sourceRetry: yes     # Auto-reconnect on failure
+    sourceRetryPause: 2s
     readUser: ''
     readPass: ''
-    rtmpDisable: no
-    webrtcDisable: no
-    hlsDisable: no
 
 # WebRTC - ports from env (no default 8189)
 webrtc: yes
 webrtcAddress: :8889
-webrtcEncryption: no
 webrtcAllowOrigin: '*'
 webrtcTrustedProxies: []
 webrtcLocalUDPAddress: :__WEBRTC_UDP_PORT__
 webrtcLocalTCPAddress: ':__WEBRTC_UDP_PORT__'
-webrtcIPsFromInterfaces: no
+webrtcIPsFromInterfaces: false
 webrtcIPsFromInterfacesList: []
 webrtcAdditionalHosts: ['__SERVER_IP__']
 # STUN helps NAT traversal; client and server can discover reachable addresses
@@ -47,11 +48,9 @@ webrtcICEServers2:
 
 rtmp: yes
 rtmpAddress: :1935
-rtmpEncryption: no
 
 hls: yes
 hlsAddress: :8888
-hlsEncryption: no
 hlsServerKey: server.key
 hlsServerCert: server.crt
 hlsAllowOrigin: '*'
@@ -61,4 +60,4 @@ hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 hlsSegmentMaxSize: 50M
 
-record: no
+record: false

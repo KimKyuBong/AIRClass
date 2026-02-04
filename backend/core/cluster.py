@@ -320,6 +320,7 @@ class ClusterManager:
                         ) as client:
                             # MediaMTX API로 현재 연결 수 조회
                             from config import MEDIAMTX_API_URL
+
                             response = await client.get(
                                 f"{MEDIAMTX_API_URL}/v3/paths/list"
                             )
@@ -533,7 +534,7 @@ mdns_service = None  # mDNS 광고 서비스
 
 async def init_cluster_mode():
     """클러스터 모드 초기화"""
-    mode = os.getenv("MODE", "standalone").lower()
+    mode = os.getenv("MODE", "main").lower()
 
     if mode == "main":
         # Main Node 모드
@@ -638,7 +639,7 @@ async def init_cluster_mode():
 
 async def shutdown_cluster():
     """클러스터 종료"""
-    mode = os.getenv("MODE", "standalone").lower()
+    mode = os.getenv("MODE", "main").lower()
 
     if mode == "main":
         await cluster_manager.stop()

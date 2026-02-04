@@ -84,6 +84,7 @@ services:
       RTMP_PORT: 1935
       WEBRTC_PORT: 8889
       WEBRTC_UDP_PORT: 8189
+      MEDIAMTX_API_URL: http://127.0.0.1:9997
       
       # 녹화 설정 (Main의 핵심 역할)
       RECORDING_ENABLED: "true"
@@ -96,7 +97,7 @@ services:
       
       # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-localhost}
+      SERVER_IP: ${SERVER_IP:-127.0.0.1}
       
       # Redis 연결
       REDIS_URL: redis://redis:6379
@@ -154,6 +155,8 @@ services:
       # 스트리밍 설정
       WEBRTC_PORT: 8889
       WEBRTC_UDP_PORT: 8190
+      WEBRTC_EXTERNAL_PORT: 8890
+      MEDIAMTX_API_URL: http://127.0.0.1:9997
       
       # Main 노드에서 스트림 Pull (RTMP/WebRTC)
       STREAM_SOURCE: rtmp://main:1935/live
@@ -170,7 +173,7 @@ services:
       
       # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-localhost}
+      SERVER_IP: ${SERVER_IP:-127.0.0.1}
       
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
@@ -216,6 +219,8 @@ services:
       # 스트리밍 설정
       WEBRTC_PORT: 8889
       WEBRTC_UDP_PORT: 8191
+      WEBRTC_EXTERNAL_PORT: 8891
+      MEDIAMTX_API_URL: http://127.0.0.1:9997
       
       # Main 노드에서 스트림 Pull (RTMP/WebRTC)
       STREAM_SOURCE: rtmp://main:1935/live
@@ -232,7 +237,7 @@ services:
       
       # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-localhost}
+      SERVER_IP: ${SERVER_IP:-127.0.0.1}
       
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
@@ -278,6 +283,8 @@ services:
       # 스트리밍 설정
       WEBRTC_PORT: 8889
       WEBRTC_UDP_PORT: 8192
+      WEBRTC_EXTERNAL_PORT: 8892
+      MEDIAMTX_API_URL: http://127.0.0.1:9997
       
       # Main 노드에서 스트림 Pull (RTMP/WebRTC)
       STREAM_SOURCE: rtmp://main:1935/live
@@ -294,7 +301,7 @@ services:
       
       # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-localhost}
+      SERVER_IP: ${SERVER_IP:-127.0.0.1}
       
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
