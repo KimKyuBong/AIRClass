@@ -5,8 +5,10 @@ Tests for Monitoring Router
 
 Test Coverage:
 - GET /metrics: Prometheus 메트릭 노출
-- GET /api/viewers: MediaMTX 뷰어 수 조회
+- GET /api/viewers: LiveKit 참가자 수 조회
 - 클러스터 모드별 메트릭 수집
+
+Note: MediaMTX → LiveKit 마이그레이션 완료
 """
 
 import pytest
@@ -263,9 +265,7 @@ def test_get_viewers_no_live_stream_path(mock_httpx_client, client):
 @patch.dict("os.environ", {"MODE": "main"})
 @patch("routers.monitoring.httpx.AsyncClient")
 @patch("routers.monitoring.cluster_manager")
-def test_get_viewers_main_mode_with_sub_nodes(
-    mock_cluster_manager, mock_httpx_client, client
-):
+def test_get_viewers_main_mode_with_sub_nodes(mock_cluster_manager, mock_httpx_client, client):
     """Main 모드: Sub 노드 정보 포함"""
     # Main node MediaMTX 응답
     mock_response = MagicMock()

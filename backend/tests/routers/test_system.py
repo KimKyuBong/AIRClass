@@ -5,8 +5,10 @@ Tests for System Status Router
 
 Test Coverage:
 - GET /: Root status endpoint
-- GET /health: Health check with MediaMTX API
+- GET /health: Health check with LiveKit API
 - GET /api/status: WebSocket connection status
+
+Note: MediaMTX → LiveKit 마이그레이션 완료
 """
 
 import pytest
