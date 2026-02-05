@@ -1,13 +1,14 @@
 """
-LiveKit 설정 동적 생성 모듈
-
-FastAPI가 노드 역할(main/sub)에 따라 livekit.yaml을 동적으로 생성
+LiveKit 설정 생성 모듈
+======================
+노드 역할(main/sub)에 따라 동적으로 LiveKit YAML 설정 생성
 """
 
+import os
 import yaml
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +130,17 @@ class LiveKitConfigGenerator:
                 "use_external_ip": True,
                 "node_ip": "0.0.0.0",  # 컨테이너 환경에서 자동 감지
             },
-            # TURN 서버 비활성화 (도메인 설정 없이는 실패)
-            # 프로덕션에서는 TURN 서버 설정 권장
+            # TURN 서버 설정 (NAT 통과용)
+            # 프로덕션 환경에서는 반드시 활성화 필요
+            "turn": {
+                "enabled": os.getenv("TURN_ENABLED", "false").lower() == "true",
+                "domain": os.getenv("TURN_DOMAIN", ""),  # 예: turn.example.com
+                "tls_port": int(os.getenv("TURN_TLS_PORT", "5349")),
+                "udp_port": int(os.getenv("TURN_UDP_PORT", "3478")),
+                "external_tls": os.getenv("TURN_EXTERNAL_TLS", "true").lower() == "true",
+            }
+            if os.getenv("TURN_ENABLED", "false").lower() == "true"
+            else {},
         }
 
         return config
