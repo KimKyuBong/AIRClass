@@ -17,20 +17,20 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "AIRClass2025DevSecret12345
 # LiveKit 서버 URL
 # - API 호출용: 컨테이너 내부 localhost 사용 (FastAPI → LiveKit 서버)
 # - 클라이언트용: 외부 접속 가능한 SERVER_IP 사용 (브라우저 → LiveKit 서버)
-LIVEKIT_API_URL = os.getenv("LIVEKIT_URL", "ws://localhost:7880")  # API 내부 호출
 SERVER_IP = os.getenv("SERVER_IP", "localhost")
 LIVEKIT_CLIENT_URL = f"ws://{SERVER_IP}:7880"  # 클라이언트 WebSocket URL
+LIVEKIT_HTTP_URL = "http://localhost:7880"  # API 호출용 HTTP URL
 
-# LiveKit API 클라이언트 초기화 (HTTP URL로 변환)
-LIVEKIT_HTTP_URL = LIVEKIT_API_URL.replace("ws://", "http://").replace("wss://", "https://")
-lkapi = api.LiveKitAPI(url=LIVEKIT_HTTP_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
-# 외부 접속을 위해 SERVER_IP 사용 (localhost는 외부에서 접근 불가)
-SERVER_IP = os.getenv("SERVER_IP", "localhost")
-LIVEKIT_URL = f"ws://{SERVER_IP}:7880"
-LIVEKIT_HTTP_URL = f"http://{SERVER_IP}:7880"  # API 호출용 HTTP URL
 
-# LiveKit API 클라이언트 초기화
-lkapi = api.LiveKitAPI(url=LIVEKIT_HTTP_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET)
+def get_livekit_api() -> api.LiveKitAPI:
+    """
+    LiveKit API 클라이언트 생성 (매 요청마다 새 인스턴스)
+
+    Note: 싱글톤 패턴 대신 매번 새로 생성하여 연결 문제 방지
+    """
+    return api.LiveKitAPI(
+        url=LIVEKIT_HTTP_URL, api_key=LIVEKIT_API_KEY, api_secret=LIVEKIT_API_SECRET
+    )
 
 
 @router.post("/token")
@@ -123,18 +123,22 @@ async def list_rooms():
         }
     """
     try:
-        response = await lkapi.room.list_rooms(api.ListRoomsRequest())
-        rooms = [
-            {
-                "name": room.name,
-                "num_participants": room.num_participants,
-                "creation_time": room.creation_time,
-                "max_participants": room.max_participants,
-                "empty_timeout": room.empty_timeout,
-            }
-            for room in response.rooms
-        ]
-        return {"rooms": rooms, "count": len(rooms)}
+        lkapi = get_livekit_api()
+        try:
+            response = await lkapi.room.list_rooms(api.ListRoomsRequest())
+            rooms = [
+                {
+                    "name": room.name,
+                    "num_participants": room.num_participants,
+                    "creation_time": room.creation_time,
+                    "max_participants": room.max_participants,
+                    "empty_timeout": room.empty_timeout,
+                }
+                for room in response.rooms
+            ]
+            return {"rooms": rooms, "count": len(rooms)}
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list rooms: {str(e)}")
 
@@ -162,23 +166,29 @@ async def list_participants(room_name: str):
         }
     """
     try:
-        response = await lkapi.room.list_participants(api.ListParticipantsRequest(room=room_name))
-        participants = [
-            {
-                "identity": p.identity,
-                "name": p.name,
-                "state": api.ParticipantInfo.State.Name(p.state),
-                "is_publisher": p.is_publisher,
-                "joined_at": p.joined_at,
-                "num_tracks": len(p.tracks),
+        lkapi = get_livekit_api()
+        try:
+            response = await lkapi.room.list_participants(
+                api.ListParticipantsRequest(room=room_name)
+            )
+            participants = [
+                {
+                    "identity": p.identity,
+                    "name": p.name,
+                    "state": api.ParticipantInfo.State.Name(p.state),
+                    "is_publisher": p.is_publisher,
+                    "joined_at": p.joined_at,
+                    "num_tracks": len(p.tracks),
+                }
+                for p in response.participants
+            ]
+            return {
+                "room_name": room_name,
+                "participants": participants,
+                "count": len(participants),
             }
-            for p in response.participants
-        ]
-        return {
-            "room_name": room_name,
-            "participants": participants,
-            "count": len(participants),
-        }
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list participants: {str(e)}")
 
@@ -195,8 +205,12 @@ async def delete_room(room_name: str):
         {"message": "Room deleted successfully"}
     """
     try:
-        await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
-        return {"message": f"Room '{room_name}' deleted successfully"}
+        lkapi = get_livekit_api()
+        try:
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
+            return {"message": "Room deleted successfully", "room_name": room_name}
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete room: {str(e)}")
 
@@ -214,9 +228,17 @@ async def remove_participant(room_name: str, identity: str):
         {"message": "Participant removed successfully"}
     """
     try:
-        await lkapi.room.remove_participant(
-            api.RoomParticipantIdentity(room=room_name, identity=identity)
-        )
-        return {"message": f"Participant '{identity}' removed from room '{room_name}'"}
+        lkapi = get_livekit_api()
+        try:
+            await lkapi.room.remove_participant(
+                api.RoomParticipantIdentity(room=room_name, identity=identity)
+            )
+            return {
+                "message": "Participant removed successfully",
+                "room_name": room_name,
+                "identity": identity,
+            }
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to remove participant: {str(e)}")
