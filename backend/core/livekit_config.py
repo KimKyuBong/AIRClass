@@ -120,15 +120,17 @@ class LiveKitConfigGenerator:
                 "auto_create": True,
                 "empty_timeout": 300,  # 5분
                 "max_participants": 200,
-                # enable_pit 제거 (LiveKit 1.9.x에서 기본 활성화)
             },
             "rtc": {
                 "port_range_start": ports["rtc_start"],
                 "port_range_end": ports["rtc_end"],
-                "tcp_port": ports["tcp_port"],
-                "udp_port": ports["udp_port"],
-                "use_external_ip": True,
-                "node_ip": "0.0.0.0",  # 컨테이너 환경에서 자동 감지
+                "use_external_ip": False,
+                "node_ip": os.getenv("LIVEKIT_ADVERTISE_IP", "127.0.0.1"),
+            },
+            # 고화질 전송을 위한 제한 해제 (60Mbps+ 허용)
+            "limit": {
+                "bytes_per_sec": 0,  # 무제한
+                "num_tracks": 0,  # 무제한
             },
             # TURN 서버 설정 (NAT 통과용)
             # 프로덕션 환경에서는 반드시 활성화 필요

@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>AirClass LiveKit 테스트</title>
+        <!-- LiveKit SDK 최신 버전 -->
+        <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.10.0/dist/livekit-client.umd.min.js"></script>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                padding: 20px;
+            }
+
+            .container {
+                max-width: 1400px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 16px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                overflow: hidden;
+            }
+
+            header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 30px;
+                text-align: center;
+            }
+
+            header h1 {
+                font-size: 2.5em;
+                margin-bottom: 10px;
+            }
+
+            header p {
+                font-size: 1.1em;
+                opacity: 0.9;
+            }
+
+            .content {
+                display: grid;
+                grid-template-columns: 350px 1fr;
+                gap: 0;
+                min-height: calc(100vh - 200px);
+            }
+
+            .sidebar {
+                background: #f8f9fa;
+                padding: 30px;
+                border-right: 1px solid #e0e0e0;
+            }
+
+            .control-section {
+                background: white;
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 20px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            }
+
+            .control-section h3 {
+                color: #667eea;
+                margin-bottom: 15px;
+                font-size: 1.1em;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .form-group {
+                margin-bottom: 15px;
+            }
+
+            label {
+                display: block;
+                margin-bottom: 8px;
+                color: #555;
+                font-weight: 500;
+                font-size: 0.9em;
+            }
+
+            input,
+            select {
+                width: 100%;
+                padding: 12px;
+                border: 2px solid #e0e0e0;
+                border-radius: 8px;
+                font-size: 14px;
+                transition: all 0.3s;
+            }
+
+            input:focus,
+            select:focus {
+                outline: none;
+                border-color: #667eea;
+                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            }
+
+            button {
+                width: 100%;
+                padding: 14px;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            .btn-primary {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+            }
+
+            .btn-primary:hover:not(:disabled) {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+            }
+
+            .btn-danger {
+                background: #e74c3c;
+                color: white;
+                margin-top: 10px;
+            }
+
+            .btn-danger:hover:not(:disabled) {
+                background: #c0392b;
+            }
+
+            button:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+
+            .status {
+                padding: 12px;
+                border-radius: 8px;
+                margin-top: 15px;
+                font-size: 0.9em;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .status-connected {
+                background: #d4edda;
+                color: #155724;
+            }
+
+            .status-disconnected {
+                background: #f8d7da;
+                color: #721c24;
+            }
+
+            .status-connecting {
+                background: #fff3cd;
+                color: #856404;
+            }
+
+            .video-area {
+                padding: 30px;
+                background: #1a1a1a;
+            }
+
+            .video-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(1200px, 1fr));
+                gap: 20px;
+                margin-bottom: 20px;
+            }
+
+            .video-container {
+                background: #2a2a2a;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+                position: relative;
+            }
+
+            .video-label {
+                position: absolute;
+                top: 15px;
+                left: 15px;
+                background: rgba(102, 126, 234, 0.9);
+                color: white;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 0.9em;
+                z-index: 10;
+                backdrop-filter: blur(10px);
+            }
+
+            video {
+                width: 100%;
+                height: auto;
+                display: block;
+                background: #000;
+                min-height: 800px;
+                object-fit: contain;
+            }
+
+            .participants-list {
+                background: #2a2a2a;
+                padding: 20px;
+                border-radius: 12px;
+                color: white;
+            }
+
+            .participants-list h4 {
+                margin-bottom: 15px;
+                color: #667eea;
+            }
+
+            .participant-item {
+                background: #3a3a3a;
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 10px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            .participant-name {
+                font-weight: 500;
+            }
+
+            .participant-role {
+                background: #667eea;
+                padding: 4px 10px;
+                border-radius: 4px;
+                font-size: 0.8em;
+            }
+
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 15px;
+                margin-top: 20px;
+            }
+
+            .stat-card {
+                background: #3a3a3a;
+                padding: 15px;
+                border-radius: 8px;
+                text-align: center;
+            }
+
+            .stat-value {
+                font-size: 2em;
+                font-weight: 700;
+                color: #667eea;
+                margin-bottom: 5px;
+            }
+
+            .stat-label {
+                font-size: 0.9em;
+                color: #aaa;
+            }
+
+            .logs {
+                background: #2a2a2a;
+                padding: 20px;
+                border-radius: 12px;
+                margin-top: 20px;
+                max-height: 200px;
+                overflow-y: auto;
+                font-family: "Courier New", monospace;
+                font-size: 0.85em;
+            }
+
+            .log-entry {
+                padding: 6px 0;
+                color: #aaa;
+                border-bottom: 1px solid #3a3a3a;
+            }
+
+            .log-entry:last-child {
+                border-bottom: none;
+            }
+
+            .log-time {
+                color: #667eea;
+                margin-right: 10px;
+            }
+
+            @keyframes pulse {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.5;
+                }
+            }
+
+            .connecting-indicator {
+                animation: pulse 1.5s ease-in-out infinite;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <h1>🎬 AirClass LiveKit 테스트</h1>
+                <p>메인 노드 → 서브 노드 영상 전송 테스트</p>
+            </header>
+
+            <div class="content">
+                <div class="sidebar">
+                    <div class="control-section">
+                        <h3>🔐 연결 설정</h3>
+                        <div class="form-group">
+                            <label>노드 선택</label>
+                            <select id="nodeSelect">
+                                <option value="http://localhost:8000">
+                                    메인 노드 (8000)
+                                </option>
+                                <option value="http://localhost:8001">
+                                    서브 노드 (8001)
+                                </option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>사용자 타입</label>
+                            <select id="userType">
+                                <option value="teacher">교사 (송출)</option>
+                                <option value="student">학생 (수신)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>사용자 ID</label>
+                            <input
+                                type="text"
+                                id="userId"
+                                placeholder="예: teacher-001"
+                            />
+                        </div>
+                        <div class="form-group">
+                            <label>룸 이름</label>
+                            <input
+                                type="text"
+                                id="roomName"
+                                value="test-classroom"
+                            />
+                        </div>
+                        <button class="btn-primary" id="connectBtn">
+                            연결하기
+                        </button>
+                        <button class="btn-danger" id="disconnectBtn" disabled>
+                            연결 종료
+                        </button>
+                        <button class="btn-primary" id="shareBtn" disabled>
+                            화면 공유
+                        </button>
+
+                        <div id="status" class="status status-disconnected">
+                            ⭕ 연결되지 않음
+                        </div>
+                    </div>
+
+                    <div class="control-section">
+                        <h3>📊 통계</h3>
+                        <div class="stats">
+                            <div class="stat-card">
+                                <div class="stat-value" id="participantCount">
+                                    0
+                                </div>
+                                <div class="stat-label">참가자</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="videoCount">0</div>
+                                <div class="stat-label">비디오</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="audioCount">0</div>
+                                <div class="stat-label">오디오</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="video-area">
+                    <div class="video-grid" id="videoGrid">
+                        <div class="video-container">
+                            <div class="video-label">내 카메라</div>
+                            <video
+                                id="localVideo"
+                                autoplay
+                                muted
+                                playsinline
+                            ></video>
+                        </div>
+                    </div>
+
+                    <div class="participants-list">
+                        <h4>👥 참가자 목록</h4>
+                        <div id="participantsList"></div>
+                    </div>
+
+                    <div class="logs" id="logs">
+                        <div class="log-entry">
+                            <span class="log-time">시작</span>
+                            <span>연결 대기 중...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script src="livekit-client.js"></script>
+    </body>
+</html>
