@@ -22,8 +22,8 @@ services:
     image: mongo:7
     container_name: airclass-mongodb
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-airclass}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-airclass2025}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
       MONGO_INITDB_DATABASE: airclass
     ports:
       - "27017:27017"
@@ -80,13 +80,13 @@ services:
       NODE_NAME: main
       NODE_HOST: main
       NODE_PORT: 8000
-      MAIN_API_PORT: ${MAIN_API_PORT:-8000}
+      MAIN_API_PORT: ${MAIN_API_PORT}
       
       # LiveKit 설정
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-AIRClass2025DevKey123456789ABC}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-AIRclass2025DevSecretXYZ987654321}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ws://localhost:7880  # 컨테이너 내부 주소
-      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://10.100.0.102:7880}  # 브라우저 접근용 외부 주소
+      LIVEKIT_PUBLIC_URL: ws://${SERVER_IP}:7880  # 브라우저 접근용 (SERVER_IP와 동일)
       LIVEKIT_BINARY: /usr/local/bin/livekit-server
       LIVEKIT_PORT: 7880
       LIVEKIT_RTC_PORT_START: 50000
@@ -98,23 +98,23 @@ services:
       SCREENSHOT_INTERVAL: 10
       
       # 보안 설정
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CLUSTER_SECRET: ${CLUSTER_SECRET}
       
-      # 네트워크 설정 (스크립트/GUI에서 SERVER_IP, LIVEKIT_PUBLIC_URL 주입)
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-10.100.0.102}
+      # 네트워크 설정 (스크립트/GUI에서 SERVER_IP만 주입하면 됨)
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      SERVER_IP: ${SERVER_IP}
       
       # Redis & MongoDB
       REDIS_URL: redis://redis:6379
-      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
+      MONGO_URL: mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@mongodb:27017/airclass?authSource=admin
       
       # 최대 연결 수 (Main은 제한 없음)
       MAX_CONNECTIONS: 0
     ports:
-      - "${MAIN_API_PORT:-8000}:8000"       # FastAPI
-      - "${MAIN_LIVEKIT_PORT:-7880}:7880"   # LiveKit HTTP/WebSocket
-      - "${MAIN_RTC_PORT_START:-50000}-${MAIN_RTC_PORT_END:-50020}:50000-50020/udp"  # LiveKit RTC
+      - "${MAIN_API_PORT}:8000"       # FastAPI
+      - "${MAIN_LIVEKIT_PORT}:7880"   # LiveKit HTTP/WebSocket
+      - "${MAIN_RTC_PORT_START}-${MAIN_RTC_PORT_END}:50000-50020/udp"  # LiveKit RTC
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - recordings:/recordings
@@ -159,8 +159,8 @@ services:
       MAIN_NODE_URL: http://main:8000
       
       # LiveKit 설정
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-AIRClass2025DevKey123456789ABC}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-AIRclass2025DevSecretXYZ987654321}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       LIVEKIT_URL: ws://sub-1:7890
       LIVEKIT_BINARY: /usr/local/bin/livekit-server
       LIVEKIT_PORT: 7890
@@ -169,22 +169,22 @@ services:
       
       # Redis & MongoDB
       REDIS_URL: redis://redis:6379
-      MONGO_URL: mongodb://${MONGO_USERNAME:-airclass}:${MONGO_PASSWORD:-airclass2025}@mongodb:27017/airclass?authSource=admin
+      MONGO_URL: mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@mongodb:27017/airclass?authSource=admin
       
       # 보안 설정
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
-      CLUSTER_SECRET: ${CLUSTER_SECRET:-airclass2025}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CLUSTER_SECRET: ${CLUSTER_SECRET}
       
       # 네트워크 설정
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      SERVER_IP: ${SERVER_IP:-127.0.0.1}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      SERVER_IP: ${SERVER_IP}
       
       # Sub 노드 수용 인원
       MAX_CONNECTIONS: 150
     ports:
-      - "${SUB1_API_PORT:-8001}:8000"        # FastAPI
-      - "${SUB1_LIVEKIT_PORT:-7890}:7890"    # LiveKit HTTP/WebSocket
-      - "${SUB1_RTC_PORT_START:-51000}-${SUB1_RTC_PORT_END:-51020}:51000-51020/udp"  # LiveKit RTC
+      - "${SUB1_API_PORT}:8000"        # FastAPI
+      - "${SUB1_LIVEKIT_PORT}:7890"    # LiveKit HTTP/WebSocket
+      - "${SUB1_RTC_PORT_START}-${SUB1_RTC_PORT_END}:51000-51020/udp"  # LiveKit RTC
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - recordings:/recordings
@@ -219,7 +219,7 @@ services:
     networks:
       - airclass-network
     environment:
-      VITE_BACKEND_URL: ${VITE_BACKEND_URL:-http://localhost:8000}
+      VITE_BACKEND_URL: ${VITE_BACKEND_URL}
       BACKEND_HOST: main
       MEDIAMTX_HOST: main
     depends_on:

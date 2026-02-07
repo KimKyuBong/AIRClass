@@ -24,6 +24,45 @@ import json
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+def get_docker_compose_cmd():
+    """docker compose (v2) 또는 docker-compose (v1) 명령 반환. 크로스 플랫폼."""
+    try:
+        r = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if r.returncode == 0:
+            return ["docker", "compose"]
+    except Exception:
+        pass
+    return ["docker-compose"]
+
+
+def get_local_interface_ips():
+    """사용 가능한 로컬 인터페이스 IP 목록 (루프백 제외). 크로스 플랫폼."""
+    ips = []
+    try:
+        import netifaces
+        for iface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET) or []
+            for a in addrs:
+                addr = a.get("addr")
+                if addr and not addr.startswith("127."):
+                    ips.append(addr)
+    except (ImportError, AttributeError):
+        pass
+    if not ips:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ips.append(s.getsockname()[0])
+            s.close()
+        except Exception:
+            ips.append("127.0.0.1")
+    return ips if ips else ["127.0.0.1"]
+
 
 class AIRClassGUI(ctk.CTk):
     def __init__(self):
@@ -189,6 +228,8 @@ class AIRClassGUI(ctk.CTk):
             log_frame, font=ctk.CTkFont(family="Courier", size=12), wrap="word"
         )
         self.log_text.pack(pady=5, padx=20, fill="both", expand=True)
+        # 로그 영역: 선택 후 Ctrl+C / Cmd+C 로 복사 가능, 수정(입력·붙여넣기)은 막음
+        self._bind_log_copy_and_readonly()
 
         # ========== 푸터 ==========
         footer_frame = ctk.CTkFrame(self, corner_radius=10, height=40)
@@ -207,6 +248,76 @@ class AIRClassGUI(ctk.CTk):
         timestamp = time.strftime("%H:%M:%S")
         self.log_text.insert("end", f"[{timestamp}] {message}\n")
         self.log_text.see("end")
+
+    def _bind_log_copy_and_readonly(self):
+        """로그 텍스트: Ctrl+C 복사 가능, 입력/붙여넣기로 수정 불가."""
+        # CustomTkinter 내부 tk Text 위젯 찾기 (버전별 _textbox 또는 자식 탐색)
+        textbox = None
+        try:
+            textbox = getattr(self.log_text, "_textbox", None)
+        except Exception:
+            pass
+        if textbox is None:
+            for w in self.log_text.winfo_children():
+                if w.winfo_class() == "Text":
+                    textbox = w
+                    break
+        if textbox is None:
+            textbox = self.log_text
+        # 선택 가능하도록 (disabled면 드래그 선택이 안 될 수 있음)
+        try:
+            textbox.configure(state="normal")
+        except Exception:
+            pass
+
+        def copy_selection(event=None):
+            try:
+                sel = textbox.get("sel.first", "sel.last")
+                if not sel.strip():
+                    return "break"
+                root = self.winfo_toplevel()
+                root.clipboard_clear()
+                root.clipboard_append(sel)
+                root.update()  # 클립보드 반영
+            except (tk.TclError, AttributeError, Exception):
+                pass
+            return "break"
+
+        def block_edit(event):
+            # Ctrl+C, Cmd+C 허용 (복사)
+            if (event.state & 0x4) or (event.state & 0x80000):  # Control or Command
+                if event.keysym.lower() == "c":
+                    copy_selection(event)
+                    return "break"
+                if event.keysym.lower() == "a":
+                    try:
+                        textbox.tag_add("sel", "1.0", "end")
+                    except Exception:
+                        pass
+                    return "break"
+            # 수정 방지
+            if event.keysym in ("BackSpace", "Delete", "Return", "Tab"):
+                return "break"
+            if len(event.keysym) == 1 or event.keysym.startswith("KP_"):
+                return "break"
+            return None
+
+        for seq in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
+            try:
+                textbox.bind(seq, copy_selection)
+            except Exception:
+                pass
+        textbox.bind("<Key>", block_edit)
+
+        # 우클릭 메뉴: 복사
+        def show_log_context_menu(event):
+            try:
+                menu = tk.Menu(self, tearoff=0)
+                menu.add_command(label="복사 (Ctrl+C)", command=copy_selection)
+                menu.tk_popup(event.x_root, event.y_root)
+            except Exception:
+                pass
+        textbox.bind("<Button-3>", show_log_context_menu)  # Button-3 = 우클릭
 
     def check_docker_status(self):
         """Docker 설치 및 실행 상태 확인"""
@@ -244,9 +355,9 @@ class AIRClassGUI(ctk.CTk):
     def check_server_status(self):
         """서버 실행 상태 확인"""
         try:
-            # docker-compose ps 실행
+            cmd = get_docker_compose_cmd() + ["ps", "--format", "json"]
             result = subprocess.run(
-                ["docker-compose", "ps", "--format", "json"],
+                cmd,
                 capture_output=True,
                 text=True,
                 cwd=self.project_root,
@@ -317,6 +428,36 @@ class AIRClassGUI(ctk.CTk):
             text=f"📍 선생님: http://{server_ip}:5173/teacher | 학생: http://{server_ip}:5173/student"
         )
 
+    def _ensure_env_complete(self):
+        """docker-compose에 기본값이 없으므로 .env에 없는 변수만 기본값으로 추가"""
+        load_dotenv(self.env_file)
+        server_ip = os.getenv("SERVER_IP", "localhost")
+        defaults = {
+            "MONGO_USERNAME": "airclass",
+            "MONGO_PASSWORD": "airclass2025",
+            "LIVEKIT_API_KEY": "AIRClass2025DevKey123456789ABC",
+            "LIVEKIT_API_SECRET": "AIRclass2025DevSecretXYZ987654321",
+            "JWT_SECRET_KEY": os.getenv("JWT_SECRET_KEY") or (__import__("secrets").token_hex(32)),
+            "CLUSTER_SECRET": os.getenv("CLUSTER_SECRET") or "airclass2025",
+            "MAIN_API_PORT": "8000",
+            "MAIN_LIVEKIT_PORT": "7880",
+            "MAIN_RTC_PORT_START": "50000",
+            "MAIN_RTC_PORT_END": "50020",
+            "SUB1_API_PORT": "8001",
+            "SUB1_LIVEKIT_PORT": "7890",
+            "SUB1_RTC_PORT_START": "51000",
+            "SUB1_RTC_PORT_END": "51020",
+            "CORS_ORIGINS": "*",
+            "VITE_BACKEND_URL": f"http://{server_ip}:8000",
+        }
+        changed = False
+        for key, val in defaults.items():
+            if not os.getenv(key):
+                set_key(self.env_file, key, val)
+                changed = True
+        if changed:
+            load_dotenv(self.env_file, override=True)
+
     def start_server(self):
         """서버 시작"""
         if not self.docker_running:
@@ -326,14 +467,16 @@ class AIRClassGUI(ctk.CTk):
             )
             return
 
+        self._ensure_env_complete()
         self.log("서버를 시작하는 중...")
         self.start_button.configure(state="disabled", text="시작 중...")
 
         def start_thread():
             try:
-                # docker-compose up -d 실행
+                # docker compose up -d (v2) 또는 docker-compose up -d (v1)
+                cmd = get_docker_compose_cmd() + ["up", "-d"]
                 process = subprocess.Popen(
-                    ["docker-compose", "up", "-d"],
+                    cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -386,8 +529,9 @@ class AIRClassGUI(ctk.CTk):
 
         def stop_thread():
             try:
+                cmd = get_docker_compose_cmd() + ["down"]
                 process = subprocess.Popen(
-                    ["docker-compose", "down"],
+                    cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -522,11 +666,27 @@ class SetupWizard(ctk.CTkToplevel):
 
         ip_hint = ctk.CTkLabel(
             form_frame,
-            text="💡 자동 감지된 IP입니다. 필요시 수정하세요.",
+            text="💡 자동 감지된 IP입니다. 필요시 수정하거나 아래에서 다른 인터페이스를 선택하세요.",
             font=ctk.CTkFont(size=12),
             text_color="gray",
         )
         ip_hint.pack(pady=5, anchor="w", padx=20)
+
+        # 인터페이스 선택 (크로스 플랫폼: 여러 IP 중 선택)
+        iface_label = ctk.CTkLabel(
+            form_frame,
+            text="네트워크 인터페이스:",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        )
+        iface_label.pack(pady=(5, 2), anchor="w", padx=20)
+        self.iface_combo = ctk.CTkComboBox(
+            form_frame,
+            values=get_local_interface_ips(),
+            width=280,
+            command=self._on_iface_selected,
+        )
+        self.iface_combo.pack(pady=2, padx=20, anchor="w")
 
         # 클러스터 비밀번호
         pwd_label = ctk.CTkLabel(
@@ -564,16 +724,22 @@ class SetupWizard(ctk.CTkToplevel):
         )
         save_btn.pack(pady=20, padx=40, fill="x")
 
+    def _on_iface_selected(self, choice):
+        """인터페이스 선택 시 IP 입력란에 반영"""
+        self.ip_entry.delete(0, "end")
+        self.ip_entry.insert(0, choice)
+
     def detect_ip(self):
         """로컬 IP 자동 감지"""
-        try:
-            # 외부 연결을 시도하여 로컬 IP 확인
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-            self.ip_entry.insert(0, local_ip)
-        except:
+        ips = get_local_interface_ips()
+        if ips:
+            self.ip_entry.insert(0, ips[0])
+            if hasattr(self, "iface_combo") and self.iface_combo.cget("values"):
+                try:
+                    self.iface_combo.set(ips[0])
+                except Exception:
+                    pass
+        else:
             self.ip_entry.insert(0, "localhost")
 
     def save_config(self):
@@ -594,27 +760,36 @@ class SetupWizard(ctk.CTkToplevel):
 
         jwt_secret = secrets.token_hex(32)
 
-        # .env 파일 생성
-        env_content = f"""# AIRClass 서버 설정 파일
-# GUI로 생성됨
-
-# 서버 IP 주소
+        # .env 파일 생성 (docker-compose에서 기본값 없으므로 필요한 변수 전부 기입)
+        env_content = f"""# AIRClass 서버 설정 파일 (GUI로 생성)
+# 서버(인터페이스) IP - 접속 URL·LiveKit URL 등 모두 이 주소 기준
 SERVER_IP={server_ip}
-
-# 프론트엔드 백엔드 URL
 VITE_BACKEND_URL=http://{server_ip}:8000
-
-# CORS 설정
 CORS_ORIGINS=*
-
-# JWT 보안 키
 JWT_SECRET_KEY={jwt_secret}
-
-# Main 노드 WebRTC 사용 여부
-USE_MAIN_WEBRTC=false
-
-# 클러스터 보안 비밀번호
 CLUSTER_SECRET={cluster_secret}
+
+# MongoDB
+MONGO_USERNAME=airclass
+MONGO_PASSWORD=airclass2025
+
+# LiveKit (개발용)
+LIVEKIT_API_KEY=AIRClass2025DevKey123456789ABC
+LIVEKIT_API_SECRET=AIRclass2025DevSecretXYZ987654321
+
+# Main 노드 포트
+MAIN_API_PORT=8000
+MAIN_LIVEKIT_PORT=7880
+MAIN_RTC_PORT_START=50000
+MAIN_RTC_PORT_END=50020
+
+# Sub 노드 포트 (sub-1 사용 시)
+SUB1_API_PORT=8001
+SUB1_LIVEKIT_PORT=7890
+SUB1_RTC_PORT_START=51000
+SUB1_RTC_PORT_END=51020
+
+USE_MAIN_WEBRTC=false
 """
 
         with open(self.parent.env_file, "w", encoding="utf-8") as f:
@@ -664,6 +839,22 @@ class SettingsWindow(ctk.CTkToplevel):
         self.ip_entry = ctk.CTkEntry(form_frame, font=ctk.CTkFont(size=14), height=40)
         self.ip_entry.pack(pady=5, padx=20, fill="x")
 
+        # 인터페이스 선택 (다른 IP로 변경 시)
+        iface_label = ctk.CTkLabel(
+            form_frame,
+            text="네트워크 인터페이스:",
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+        )
+        iface_label.pack(pady=(5, 2), anchor="w", padx=20)
+        self.iface_combo = ctk.CTkComboBox(
+            form_frame,
+            values=get_local_interface_ips(),
+            width=280,
+            command=self._on_iface_selected,
+        )
+        self.iface_combo.pack(pady=2, padx=20, anchor="w")
+
         # 클러스터 비밀번호
         pwd_label = ctk.CTkLabel(
             form_frame,
@@ -699,11 +890,23 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         cancel_btn.grid(row=0, column=1, padx=5, sticky="ew")
 
+    def _on_iface_selected(self, choice):
+        """인터페이스 선택 시 IP 입력란에 반영"""
+        self.ip_entry.delete(0, "end")
+        self.ip_entry.insert(0, choice)
+
     def load_current_config(self):
         """현재 설정 로드"""
         load_dotenv(self.parent.env_file)
-        self.ip_entry.insert(0, os.getenv("SERVER_IP", ""))
+        server_ip = os.getenv("SERVER_IP", "")
+        self.ip_entry.insert(0, server_ip)
         self.pwd_entry.insert(0, os.getenv("CLUSTER_SECRET", ""))
+        if server_ip and self.iface_combo.cget("values") and server_ip not in self.iface_combo.cget("values"):
+            self.iface_combo.configure(values=list(self.iface_combo.cget("values")) + [server_ip])
+        try:
+            self.iface_combo.set(server_ip)
+        except Exception:
+            pass
 
     def save_config(self):
         """설정 저장"""
@@ -714,7 +917,7 @@ class SettingsWindow(ctk.CTkToplevel):
             messagebox.showerror("입력 오류", "모든 항목을 입력해주세요.")
             return
 
-        # .env 업데이트
+        # .env 업데이트 (SERVER_IP만; LIVEKIT_PUBLIC_URL은 docker-compose에서 자동)
         set_key(self.parent.env_file, "SERVER_IP", server_ip)
         set_key(self.parent.env_file, "VITE_BACKEND_URL", f"http://{server_ip}:8000")
         set_key(self.parent.env_file, "CLUSTER_SECRET", cluster_secret)

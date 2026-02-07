@@ -229,14 +229,24 @@
     background-color: black !important;
   }
 
-  /* 비디오 컨테이너 스타일 */
+  /* 비디오 컨테이너: 송출(스트림) 비율에 맞춰 크기 결정 (가로 100%, 높이는 aspect-ratio로) */
   .portrait-video, .landscape-video {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
     background-color: black !important;
-    width: 100%;
-    height: 100%;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 200px;
+  }
+
+  .video-container {
+    max-width: 100%;
+  }
+
+  .video-container-inner {
+    width: 100% !important;
+    height: 100% !important;
   }
 
   /* 전체화면: 화면 전체 채우고 비디오는 contain으로 전부 보이기 */
@@ -360,9 +370,10 @@
             <div 
               bind:this={videoContainer}
               class="bg-black rounded-lg overflow-hidden relative {videoContainerClass} video-container"
-              style="aspect-ratio: {videoAspectRatio}"
+              style="aspect-ratio: {videoAspectRatio};"
+              role="presentation"
             >
-              <div class="video-container-inner w-full h-full min-w-0 min-h-0">
+              <div class="video-container-inner w-full h-full min-w-0 min-h-0 flex items-center justify-center">
               {#if broadcastStream}
                 <media-player
                   bind:this={mediaPlayerEl}

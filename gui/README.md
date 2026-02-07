@@ -28,20 +28,28 @@
 
 ## 💻 설치 및 실행
 
-### 방법 1: Python으로 직접 실행 (권장)
+### 방법 1: run.sh로 실행 (권장)
+
+프로젝트 루트에서 실행. 의존성 자동 설치 후 GUI가 뜹니다.
 
 ```bash
-# GUI 폴더로 이동
-cd gui
-
-# 필요한 패키지 설치
-pip install -r requirements.txt
-
-# 실행
-python airclass_gui.py
+cd /Users/hwansi/Project/AirClass   # 프로젝트 루트로 이동
+./gui/run.sh
 ```
 
-### 방법 2: 실행 파일 빌드
+### 방법 2: 프로젝트 .venv로 직접 실행
+
+**반드시** 프로젝트의 `.venv`에 설치하고, **같은 .venv의 python**으로 실행하세요.
+
+```bash
+cd /Users/hwansi/Project/AirClass
+.venv/bin/pip install -r gui/requirements.txt
+.venv/bin/python gui/airclass_gui.py
+```
+
+`source .venv/bin/activate` 후 `python gui/airclass_gui.py`만 쓰면 시스템/다른 venv를 쓸 수 있어 `ModuleNotFoundError`가 날 수 있습니다.
+
+### 방법 3: 실행 파일 빌드
 
 #### Windows
 ```cmd
