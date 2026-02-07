@@ -25,10 +25,9 @@ from core.metrics import (
 
 # LiveKit API는 필요시 동적 import (순환 의존 방지)
 def get_livekit_api():
-    from routers.livekit import lkapi
+    from routers.livekit import get_livekit_api as _get_livekit_api
     from livekit import api
-
-    return lkapi, api
+    return _get_livekit_api(), api
 
 
 logger = logging.getLogger("uvicorn")
@@ -82,48 +81,43 @@ async def get_viewers():
 
         # Get LiveKit API
         lkapi, api = get_livekit_api()
+        try:
+            # Get rooms from LiveKit
+            rooms_res = await lkapi.room.list_rooms(api.ListRoomsRequest())
 
-        # Get rooms from LiveKit
-        rooms_res = await lkapi.room.list_rooms(api.ListRoomsRequest())
+            total_viewers = 0
+            viewers_list = []
+            room_stats = {}
 
-        total_viewers = 0
-        viewers_list = []
-        room_stats = {}
-
-        for room in rooms_res.rooms:
-            # Get participants for each room
-            participants_res = await lkapi.room.list_participants(
-                api.ListParticipantsRequest(room=room.name)
-            )
-
-            room_viewer_count = len(participants_res.participants)
-            total_viewers += room_viewer_count
-
-            # Add participants to list
-            for p in participants_res.participants:
-                viewers_list.append(
-                    {
-                        "id": p.identity,
-                        "connected_at": p.joined_at,
-                        "type": "livekit",
-                        "room": room.name,
-                    }
+            for room in rooms_res.rooms:
+                # Get participants for each room
+                participants_res = await lkapi.room.list_participants(
+                    api.ListParticipantsRequest(room=room.name)
                 )
-
-            # Room stats
-            room_stats[room.name] = {
-                "name": room.name,
-                "viewers": room_viewer_count,
-                "status": "active" if room_viewer_count > 0 else "idle",
+                room_viewer_count = len(participants_res.participants)
+                total_viewers += room_viewer_count
+                for p in participants_res.participants:
+                    viewers_list.append(
+                        {
+                            "id": p.identity,
+                            "connected_at": p.joined_at,
+                            "type": "livekit",
+                            "room": room.name,
+                        }
+                    )
+                room_stats[room.name] = {
+                    "name": room.name,
+                    "viewers": room_viewer_count,
+                    "status": "active" if room_viewer_count > 0 else "idle",
+                }
+            return {
+                "total_viewers": total_viewers,
+                "viewers": viewers_list,
+                "room_stats": room_stats,
+                "cluster_mode": mode,
             }
-
-        return {
-            "total_viewers": total_viewers,
-            "viewers": viewers_list,
-            "room_stats": room_stats,
-            "cluster_mode": mode,
-        }
-
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         logger.error(f"Failed to get viewers from LiveKit: {e}")
         return {

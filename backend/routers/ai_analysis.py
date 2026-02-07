@@ -701,13 +701,14 @@ async def set_teacher_gemini_key(
 
 
 @router.get("/keys/gemini/status")
-async def get_teacher_gemini_key_status(
-    teacher_id: str,
-    db=Depends(get_db),
-):
-    """교사 Gemini Key 활성화 여부(키 값은 반환하지 않음)"""
+async def get_teacher_gemini_key_status(teacher_id: str):
+    """교사 Gemini Key 활성화 여부(키 값은 반환하지 않음). DB/설정 오류 시에도 200으로 안전 응답."""
     try:
-        enabled = await has_teacher_gemini_key(db, teacher_id=teacher_id)
+        dbm = get_database_manager()
+        if dbm and dbm.db:
+            enabled = await has_teacher_gemini_key(dbm.db, teacher_id=teacher_id)
+        else:
+            enabled = False
         env_enabled = bool(get_env_gemini_key())
         return JSONResponse(
             {
@@ -718,7 +719,15 @@ async def get_teacher_gemini_key_status(
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("Gemini status check failed (returning safe defaults): %s", e)
+        return JSONResponse(
+            {
+                "teacher_id": teacher_id,
+                "provider": "gemini",
+                "enabled": False,
+                "env_fallback_available": bool(get_env_gemini_key()),
+            }
+        )
 
 
 @router.delete("/keys/gemini")

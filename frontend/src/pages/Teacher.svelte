@@ -1,10 +1,14 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
   import { slide } from 'svelte/transition';
-  import { Room, RoomEvent } from 'livekit-client';
-  
+  import { Room, RoomEvent, Track } from 'livekit-client';
+  import 'vidstack/player';
+  import 'vidstack/player/ui';
+  import 'vidstack/player/layouts/default';
+  import 'vidstack/icons';
+
   let ws = null;
-  let videoElement = null;
+  let mediaPlayerEl = null;
   let livekitRoom = null;
   let isConnected = false;
   let isVideoLoaded = false;
@@ -24,7 +28,10 @@
 
   let isBroadcasting = false;
   let broadcastStream = null;
-  
+  let videoContainer = null; // 전체화면용 컨테이너
+  let isFullscreen = false;
+  let isPip = false;
+
   // 스트림 소스 관리
   let streamSource = 'android'; // 'android' | 'pc'
   let isSourceSwitching = false;
@@ -39,10 +46,46 @@
   let aiEnabled = false;
   let showSettings = false;
   let geminiNotice = '';
+  let activeTab = 'chat'; // 'chat' | 'viewers' | 'ai'
+
+  // Screen Share Settings
+  let showScreenSettings = false;
+  let screenResolution = '3840x2160';
+  let screenFps = 120;
+  let screenBitrate = 60; // Mbps
+  /** @type {'vp9' | 'h264' | 'av1' | 'vp8' | 'h265'} */
+  let screenCodec = 'vp9';
+  let screenContentHint = 'motion';
+
+  const resolutionOptions = [
+    { value: '1920x1080', label: '1920×1080 (Full HD)' },
+    { value: '2560x1440', label: '2560×1440 (2K)' },
+    { value: '3840x2160', label: '3840×2160 (4K)' }
+  ];
+
+  const fpsOptions = [
+    { value: 30, label: '30 FPS' },
+    { value: 60, label: '60 FPS' },
+    { value: 120, label: '120 FPS' }
+  ];
+
+  const codecOptions = [
+    { value: 'h264', label: 'H.264 (Compatible)' },
+    { value: 'vp9', label: 'VP9 (Recommended)' },
+    { value: 'av1', label: 'AV1 (Experimental)' }
+  ];
+
+  const contentHintOptions = [
+    { value: 'detail', label: 'Detail (High Quality)' },
+    { value: 'motion', label: 'Motion (Smooth)' },
+    { value: 'text', label: 'Text (Crisp)' }
+  ];
 
   onMount(async () => {
     console.log('[Teacher] Component mounted');
-    
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('pictureinpicturechange', onPipChange);
+
     fetchGeminiStatus();
     
     window.onerror = function(msg, url, line, col, error) {
@@ -57,6 +100,10 @@
   });
 
   onDestroy(() => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.removeEventListener('pictureinpicturechange', onPipChange);
+    if (document.fullscreenElement) document.exitFullscreen();
+    if (document.pictureInPictureElement) document.exitPictureInPicture();
     if (livekitRoom) {
       livekitRoom.disconnect();
     }
@@ -83,6 +130,13 @@
     }
   }
 
+  function startLatencyMonitoringFromContainer() {
+    setTimeout(() => {
+      const v = videoContainer?.querySelector?.('video');
+      if (v) startLatencyMonitoring(v);
+    }, 300);
+  }
+
   async function startBroadcast() {
     try {
       if (isBroadcasting) return;
@@ -95,13 +149,15 @@
       
       console.log('[Teacher] Starting broadcast...');
       
-      // 1. Get Display Media
+      // 1. Get Display Media with UI settings
       try {
+        const [width, height] = screenResolution.split('x').map(Number);
+        
         broadcastStream = await navigator.mediaDevices.getDisplayMedia({
           video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 }
+            width: { ideal: width, max: width },
+            height: { ideal: height, max: height },
+            frameRate: { ideal: screenFps, max: screenFps }
           },
           audio: true
         });
@@ -122,25 +178,55 @@
       }
       const { token, url } = await response.json();
       
-      // 3. Connect to LiveKit room
+      // 3. Connect to LiveKit room with high-performance defaults
       if (livekitRoom) {
         await livekitRoom.disconnect();
+        livekitRoom = null;
+        await new Promise((r) => setTimeout(r, 150));
       }
-      livekitRoom = new Room();
+      livekitRoom = new Room({
+        adaptiveStream: false,
+        dynacast: false,
+        publishDefaults: {
+          simulcast: false,
+          videoCodec: screenCodec,
+          videoEncoding: {
+            maxBitrate: screenBitrate * 1_000_000,
+            maxFramerate: screenFps,
+            priority: 'high'
+          },
+          screenShareEncoding: {
+            maxBitrate: screenBitrate * 1_000_000,
+            maxFramerate: screenFps,
+            priority: 'high'
+          }
+        }
+      });
       await livekitRoom.connect(url, token);
       
-      // 4. Publish tracks
+      // 4. Apply contentHint for motion optimization
       const videoTrack = broadcastStream.getVideoTracks()[0];
       const audioTrack = broadcastStream.getAudioTracks()[0];
-      await livekitRoom.localParticipant.publishTrack(videoTrack);
-      if (audioTrack) await livekitRoom.localParticipant.publishTrack(audioTrack);
       
-      // 5. Preview locally
-      if (videoElement) {
-        videoElement.srcObject = broadcastStream;
-        videoElement.muted = true;
-        videoElement.play().catch(e => console.error('Preview play failed', e));
+      if (screenContentHint) {
+        videoTrack.contentHint = screenContentHint;
       }
+      
+      // 5. Publish tracks with explicit high-quality settings
+      await livekitRoom.localParticipant.publishTrack(videoTrack, {
+        source: Track.Source.ScreenShare,
+        simulcast: false,
+        videoCodec: screenCodec,
+        videoEncoding: {
+          maxBitrate: screenBitrate * 1_000_000,
+          maxFramerate: screenFps
+        },
+        screenShareEncoding: {
+          maxBitrate: screenBitrate * 1_000_000,
+          maxFramerate: screenFps
+        }
+      });
+      if (audioTrack) await livekitRoom.localParticipant.publishTrack(audioTrack);
 
       broadcastStream.getVideoTracks()[0].onended = () => {
         console.log('[Teacher] User stopped screen share via browser UI');
@@ -178,11 +264,7 @@
       broadcastStream.getTracks().forEach(track => track.stop());
       broadcastStream = null;
     }
-    
-    if (videoElement) {
-      videoElement.srcObject = null;
-    }
-    
+
     if (latencyMonitorInterval) {
       clearInterval(latencyMonitorInterval);
       latencyMonitorInterval = null;
@@ -210,10 +292,7 @@
       } else if (livekitRoom) {
         await livekitRoom.disconnect();
         livekitRoom = null;
-      }
-      
-      if (videoElement) {
-        videoElement.srcObject = null;
+        await new Promise((r) => setTimeout(r, 150));
       }
       
       if (latencyMonitorInterval) {
@@ -221,8 +300,9 @@
         latencyMonitorInterval = null;
       }
       currentLatency = 0;
-      
+
       isVideoLoaded = false;
+      broadcastStream = null;
       streamSource = newSource;
       
       if (newSource === 'android') {
@@ -252,6 +332,8 @@
       
       if (livekitRoom) {
         await livekitRoom.disconnect();
+        livekitRoom = null;
+        await new Promise((r) => setTimeout(r, 150));
       }
       
       livekitRoom = new Room();
@@ -261,15 +343,9 @@
       livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         console.log('[Teacher] Track subscribed:', track.kind, 'from', participant.identity);
         if (track.kind === 'video') {
-          if (videoElement) {
-            const element = track.attach();
-            element.id = 'remote-video';
-            videoElement.replaceWith(element);
-            videoElement = element;
-            isVideoLoaded = true;
-            videoElement.play().catch(e => console.warn('Play failed', e));
-            startLatencyMonitoring(videoElement);
-          }
+          broadcastStream = new MediaStream([track.mediaStreamTrack]);
+          isVideoLoaded = true;
+          startLatencyMonitoringFromContainer();
         }
       });
 
@@ -277,12 +353,9 @@
       livekitRoom.remoteParticipants.forEach(participant => {
         participant.trackPublications.forEach(publication => {
           if (publication.isSubscribed && publication.track?.kind === 'video') {
-            const element = publication.track.attach();
-            element.id = 'remote-video';
-            videoElement.replaceWith(element);
-            videoElement = element;
+            broadcastStream = new MediaStream([publication.track.mediaStreamTrack]);
             isVideoLoaded = true;
-            startLatencyMonitoring(videoElement);
+            startLatencyMonitoringFromContainer();
           }
         });
       });
@@ -383,9 +456,12 @@
         if (geminiStatus.enabled || geminiStatus.env_fallback_available) {
           aiEnabled = true;
         }
+      } else {
+        geminiStatus = { enabled: false, env_fallback_available: false };
       }
     } catch (e) {
-      console.error('Failed to fetch Gemini status', e);
+      console.warn('Gemini status unavailable:', e);
+      geminiStatus = { enabled: false, env_fallback_available: false };
     }
   }
 
@@ -430,6 +506,49 @@
     }
   }
 
+  function onFullscreenChange() {
+    isFullscreen = !!document.fullscreenElement;
+  }
+  function onPipChange() {
+    isPip = !!document.pictureInPictureElement;
+  }
+
+  async function toggleFullscreen() {
+    if (!videoContainer) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        isFullscreen = false;
+      } else {
+        await videoContainer.requestFullscreen();
+        isFullscreen = true;
+      }
+    } catch (e) {
+      console.warn('Fullscreen error:', e);
+    }
+  }
+
+  async function togglePip() {
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        isPip = false;
+        return;
+      }
+      const player = mediaPlayerEl ?? videoContainer?.querySelector?.('media-player');
+      const video = videoContainer?.querySelector?.('video');
+      if (player && typeof player.enterPictureInPicture === 'function') {
+        await player.enterPictureInPicture();
+        isPip = true;
+      } else if (video) {
+        await video.requestPictureInPicture();
+        isPip = true;
+      }
+    } catch (e) {
+      console.warn('PIP error:', e);
+    }
+  }
+
   async function testGemini() {
     if (!geminiTestPrompt.trim()) return;
     isGeminiLoading = true;
@@ -450,6 +569,38 @@
     }
   }
 </script>
+
+<style>
+  /* 전체화면: 화면 전체 채우고 비디오는 contain으로 전부 보이기 (검은 화면 방지) */
+  :global(.video-container:fullscreen) {
+    width: 100vw !important;
+    height: 100vh !important;
+    background: black !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    aspect-ratio: unset !important;
+  }
+  :global(.video-container:fullscreen .video-container-inner) {
+    width: 100% !important;
+    height: 100% !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: black !important;
+  }
+  :global(.video-container:fullscreen .video-container-inner media-player) {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+  }
+  :global(.video-container:fullscreen .video-container-inner video),
+  :global(.video-container:fullscreen) video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+  }
+</style>
 
 <div class="min-h-screen bg-gray-50">
   <!-- Header -->
@@ -517,17 +668,51 @@
               <span class="text-gray-600">🖥️</span> 스트림 미리보기
             {/if}
           </h2>
-          <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative">
-            <!-- svelte-ignore a11y-media-has-caption -->
-            <video
-              bind:this={videoElement}
-              class="w-full h-full object-contain"
-              autoplay
-              muted
-              playsinline
-              disablepictureinpicture
-              style="object-fit: contain;"
-            ></video>
+          <div
+            bind:this={videoContainer}
+            class="bg-black rounded-lg aspect-video flex items-center justify-center overflow-hidden relative video-container"
+          >
+            <div class="video-container-inner w-full h-full min-w-0 min-h-0">
+              {#if broadcastStream}
+                <media-player
+                  bind:this={mediaPlayerEl}
+                  src={{ src: broadcastStream, type: 'video/object' }}
+                  autoplay
+                  muted
+                  playsinline
+                  class="w-full h-full"
+                >
+                  <media-provider></media-provider>
+                  <media-video-layout></media-video-layout>
+                </media-player>
+              {/if}
+            </div>
+
+            <!-- PIP / 전체화면 버튼 -->
+            {#if isVideoLoaded}
+              <div class="absolute bottom-3 right-3 z-40 flex gap-2">
+                <button
+                  type="button"
+                  on:click={togglePip}
+                  class="p-2 rounded-lg bg-black/60 text-white hover:bg-black/80 transition"
+                  title="작은 창 (PIP)"
+                >
+                  <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z"/></svg>
+                </button>
+                <button
+                  type="button"
+                  on:click={toggleFullscreen}
+                  class="p-2 rounded-lg bg-black/60 text-white hover:bg-black/80 transition"
+                  title="전체화면"
+                >
+                  {#if isFullscreen}
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+                  {:else}
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                  {/if}
+                </button>
+              </div>
+            {/if}
             
             {#if !isVideoLoaded}
               <div class="absolute inset-0 flex items-center justify-center text-center text-gray-400 bg-gray-900 bg-opacity-90">
@@ -627,6 +812,99 @@
       </div>
 
       <div class="lg:col-span-1 flex flex-col gap-6">
+        
+        <!-- Screen Share Settings Panel -->
+        <div class="bg-white rounded-lg shadow p-4 border border-purple-100 transition-all duration-300">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+              🎥 화면 공유 설정
+            </h2>
+            <button
+              on:click={() => showScreenSettings = !showScreenSettings}
+              class="p-2 rounded-lg transition-colors {showScreenSettings ? 'bg-purple-100 text-purple-600' : 'text-gray-500 hover:bg-gray-100'}"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
+
+          {#if showScreenSettings}
+            <div transition:slide class="space-y-3">
+              <!-- Resolution -->
+              <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                  해상도
+                </label>
+                <select bind:value={screenResolution} class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white">
+                  {#each resolutionOptions as option}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <!-- FPS -->
+              <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                  프레임레이트
+                </label>
+                <select bind:value={screenFps} class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white">
+                  {#each fpsOptions as option}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <!-- Bitrate -->
+              <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                  비트레이트 (Mbps)
+                </label>
+                <input
+                  type="number"
+                  bind:value={screenBitrate}
+                  min="1"
+                  max="100"
+                  step="1"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white"
+                />
+              </div>
+
+              <!-- Codec -->
+              <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                  코덱
+                </label>
+                <select bind:value={screenCodec} class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white">
+                  {#each codecOptions as option}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <!-- Content Hint -->
+              <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                  최적화 모드
+                </label>
+                <select bind:value={screenContentHint} class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white">
+                  {#each contentHintOptions as option}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+
+              <!-- Current Settings Display -->
+              <div class="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                <p class="text-xs font-semibold text-purple-800 mb-2">현재 설정</p>
+                <p class="text-xs text-purple-700">
+                  {screenResolution.replace('x', '×')} • {screenFps} FPS • {screenBitrate} Mbps • {screenCodec.toUpperCase()}
+                </p>
+              </div>
+            </div>
+          {/if}
+        </div>
         
         <div class="bg-white rounded-lg shadow p-4 border border-blue-100 transition-all duration-300">
           <div class="flex items-center justify-between mb-4">

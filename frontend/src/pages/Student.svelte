@@ -1,9 +1,13 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
   import { Room, RoomEvent } from 'livekit-client';
+  import 'vidstack/player';
+  import 'vidstack/player/ui';
+  import 'vidstack/player/layouts/default';
+  import 'vidstack/icons';
   
   let ws = null;
-  let videoElement = null;
+  let broadcastStream = null;
   let livekitRoom = null;
   let isConnected = false;
   let isVideoLoaded = false;
@@ -11,18 +15,32 @@
   let newMessage = '';
   let studentName = '';
   let isJoined = false;
-  let latencyMonitorInterval = null;
-  let currentLatency = 0;
   let nodeInfo = { mode: 'LiveKit', node_name: 'LiveKit', node_id: 'class' };
   let isPortraitVideo = false; // 세로 모드 영상 여부
   let videoContainerClass = ''; // 동적 컨테이너 클래스
-  
+  let videoContainer = null;
+  let mediaPlayerEl = null;
+  let videoAspectRatio = '16/9';
+  let showVideoControls = false;
+  let isFullscreen = false;
+  let isPip = false;
+  let isJoining = false;
+
   // Reactive: isPortraitVideo 변경 시 videoContainerClass 자동 업데이트
   $: videoContainerClass = isPortraitVideo ? 'portrait-video' : 'landscape-video';
 
+  function onFullscreenChange() {
+    isFullscreen = !!document.fullscreenElement;
+  }
+  function onPipChange() {
+    isPip = !!document.pictureInPictureElement;
+  }
+
   onMount(async () => {
     console.log('[Student] Component mounted');
-    
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('pictureinpicturechange', onPipChange);
+
     // URL 쿼리 파라미터에서 name 가져오기
     const urlParams = new URLSearchParams(window.location.search);
     const nameFromUrl = urlParams.get('name');
@@ -34,156 +52,87 @@
       studentName = nameFromUrl;
       console.log('[Student] Auto-joining with name:', studentName);
       await joinClass();
-    } else {
-      // URL에 name이 없으면 localStorage에서 가져오기
-      studentName = localStorage.getItem('studentName') || '';
-      console.log('[Student] Name from localStorage:', studentName);
     }
   });
 
   onDestroy(() => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.removeEventListener('pictureinpicturechange', onPipChange);
     if (livekitRoom) {
       livekitRoom.disconnect();
     }
     if (ws) {
       ws.close();
     }
-    if (latencyMonitorInterval) {
-      clearInterval(latencyMonitorInterval);
-    }
   });
 
   async function joinClass() {
     if (!studentName.trim()) return;
-    
+    if (isJoining) return;
+    isJoining = true;
+
     try {
-      // 1. Save name
-      localStorage.setItem('studentName', studentName);
-      console.log('[Student] Joining class as:', studentName);
-      
-      // 2. Get LiveKit token
-      console.log('[Student] Fetching token from:', `/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student`);
-      const response = await fetch(`/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student`, { 
-        method: 'POST' 
-      });
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Token API failed (${response.status}): ${errorText}`);
-      }
+      console.log('[Student] Joining class...');
+      const response = await fetch(`/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student`, { method: 'POST' });
+      if (!response.ok) throw new Error('Failed to get token');
       
       const { token, url } = await response.json();
-      
-      console.log('[Student] LiveKit token received');
-      console.log('[Student] LiveKit URL:', url);
-      
-      // 3. Set joined state (triggers DOM update)
-      isJoined = true;
-      await tick();
-      
-      // 4. Connect to LiveKit room
-      console.log('[Student] Creating LiveKit Room...');
+
+      if (livekitRoom) {
+        await livekitRoom.disconnect();
+        livekitRoom = null;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
       livekitRoom = new Room();
-      console.log('[Student] Connecting to:', url);
       await livekitRoom.connect(url, token);
-      console.log('[Student] ✅ Connected to LiveKit room');
+      console.log('[Student] Connected to LiveKit room');
       
-      // 5. Subscribe to remote tracks
+      isJoined = true;
+      connectWebSocket();
+      
       livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         console.log('[Student] Track subscribed:', track.kind, 'from', participant.identity);
         if (track.kind === 'video') {
-          console.log('[Student] Attaching video track to element');
-          const element = track.attach();
-          element.id = 'remote-video';
-          videoElement.replaceWith(element);
-          videoElement = element;
+          broadcastStream = new MediaStream([track.mediaStreamTrack]);
           isVideoLoaded = true;
-          configureVideoForLowLatency(videoElement);
+          
+          // Detect aspect ratio
+          const videoTrack = track.mediaStreamTrack;
+          const settings = videoTrack.getSettings();
+          if (settings.width && settings.height) {
+            videoAspectRatio = `${settings.width}/${settings.height}`;
+            isPortraitVideo = settings.height > settings.width;
+          }
         }
       });
-      
-      // Handle tracks from participants already in the room
-      console.log('[Student] Checking for existing participants...');
+
+      // Handle existing tracks
       livekitRoom.remoteParticipants.forEach(participant => {
-        console.log('[Student] Found existing participant:', participant.identity);
         participant.trackPublications.forEach(publication => {
           if (publication.isSubscribed && publication.track?.kind === 'video') {
-            console.log('[Student] Attaching existing video track');
-            const element = publication.track.attach();
-            element.id = 'remote-video';
-            videoElement.replaceWith(element);
-            videoElement = element;
+            broadcastStream = new MediaStream([publication.track.mediaStreamTrack]);
             isVideoLoaded = true;
-            configureVideoForLowLatency(videoElement);
+            
+            const settings = publication.track.mediaStreamTrack.getSettings();
+            if (settings.width && settings.height) {
+              videoAspectRatio = `${settings.width}/${settings.height}`;
+              isPortraitVideo = settings.height > settings.width;
+            }
           }
         });
       });
       
-      // 6. Connect WebSocket for chat
-      connectWebSocket();
-      
     } catch (error) {
       console.error('[Student] Join failed:', error);
-      console.error('[Student] Error stack:', error.stack);
-      alert(`수업 참여 실패:\n\n${error.message}\n\n브라우저 콘솔(F12)에서 자세한 에러를 확인하세요.`);
+      const msg = error?.message || String(error);
+      const hint = msg.includes('Abort') || msg.includes('signal connection')
+        ? '\n\n(같은 네트워크에서 서버 주소·7880 포트 접속이 가능한지 확인하세요.)'
+        : '';
+      alert('수업 참여에 실패했습니다.' + hint);
+    } finally {
+      isJoining = false;
     }
-  }
-
-  // Configure video element for ultra-low latency
-  function configureVideoForLowLatency(video) {
-    console.log('[Student] Configuring video for ultra-low latency');
-    
-    // Disable buffering for Firefox
-    if (video.mozPreservesPitch !== undefined) {
-      video.mozPreservesPitch = false;
-    }
-    
-    // Force immediate playback without buffering
-    video.addEventListener('loadedmetadata', () => {
-      console.log('[Student] Video metadata loaded, forcing immediate playback');
-      
-      // 비디오 크기 감지 및 aspect ratio 계산
-      const videoWidth = video.videoWidth;
-      const videoHeight = video.videoHeight;
-      const aspectRatio = videoWidth / videoHeight;
-      
-      console.log('[Student] Video dimensions:', videoWidth, 'x', videoHeight, 'aspect ratio:', aspectRatio.toFixed(2));
-      
-      // 세로 모드 판단 (높이가 너비보다 큰 경우)
-      isPortraitVideo = videoHeight > videoWidth;
-      
-      if (isPortraitVideo) {
-        console.log('[Student] 📱 Portrait mode detected - using cover for full screen');
-        videoContainerClass = 'portrait-video';
-      } else {
-        console.log('[Student] 🖥️ Landscape mode detected - using contain');
-        videoContainerClass = 'landscape-video';
-      }
-      
-      video.play().catch(err => console.warn('[Student] Immediate play failed:', err.message));
-    });
-    
-    // Monitor video lag and keep at live edge - AGGRESSIVE MODE
-    latencyMonitorInterval = setInterval(() => {
-      if (video.buffered.length > 0) {
-        const currentTime = video.currentTime;
-        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-        const lag = bufferedEnd - currentTime;
-        currentLatency = Math.round(lag * 1000); // Convert to ms
-        
-        // AGGRESSIVE: If lag exceeds 200ms, jump to live edge
-        if (lag > 0.2) {
-          console.warn('[Student] ⚠️ Video lag detected:', lag.toFixed(3), 's - jumping to live edge');
-          video.currentTime = bufferedEnd - 0.02; // Stay 20ms behind live edge
-        }
-        
-        // ULTRA-AGGRESSIVE: If lag exceeds 500ms, something is wrong
-        if (lag > 0.5) {
-          console.error('[Student] 🔴 CRITICAL LAG:', lag.toFixed(3), 's - forcing live edge');
-          video.currentTime = bufferedEnd - 0.01; // Force to 10ms behind
-        }
-      }
-    }, 50); // Check every 50ms (increased from 100ms) for faster response
   }
 
   function connectWebSocket() {
@@ -225,47 +174,110 @@
   function leaveClass() {
     if (ws) ws.close();
     if (livekitRoom) livekitRoom.disconnect();
-    if (latencyMonitorInterval) clearInterval(latencyMonitorInterval);
     isJoined = false;
     isConnected = false;
     isVideoLoaded = false;
+    if (document.fullscreenElement) document.exitFullscreen();
+    if (document.pictureInPictureElement) document.exitPictureInPicture();
+  }
+
+  async function toggleFullscreen() {
+    if (!videoContainer) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        isFullscreen = false;
+      } else {
+        await videoContainer.requestFullscreen();
+        isFullscreen = true;
+      }
+    } catch (e) {
+      console.warn('Fullscreen error:', e);
+    }
+  }
+
+  async function togglePip() {
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        isPip = false;
+        return;
+      }
+      const player = mediaPlayerEl ?? videoContainer?.querySelector?.('media-player');
+      const video = videoContainer?.querySelector?.('video');
+      if (player && typeof player.enterPictureInPicture === 'function') {
+        await player.enterPictureInPicture();
+        isPip = true;
+      } else if (video) {
+        await video.requestPictureInPicture();
+        isPip = true;
+      } else {
+        console.warn('PIP: no video or player found');
+      }
+    } catch (e) {
+      console.warn('PIP error:', e);
+    }
   }
 </script>
 
 <style>
-  /* 기본 비디오 스타일 */
-  .video-stream {
+  /* 기본 비디오 스타일 - 크롭 방지를 위해 contain 강제 */
+  video, .video-stream {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    background-color: black !important;
+  }
+
+  /* 비디오 컨테이너 스타일 */
+  .portrait-video, .landscape-video {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background-color: black !important;
     width: 100%;
     height: 100%;
-    object-fit: contain;
   }
 
-  /* 가로 모드 비디오 (기본) */
-  .landscape-video .video-stream {
-    object-fit: contain; /* 전체를 보여주며 비율 유지 */
+  /* 전체화면: 화면 전체 채우고 비디오는 contain으로 전부 보이기 */
+  .video-container:fullscreen {
+    width: 100vw !important;
+    height: 100vh !important;
+    background: black !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    max-width: none !important;
+    max-height: none !important;
+    aspect-ratio: unset !important;
   }
 
-  /* 세로 모드 비디오 - 화면에 꽉 차게 */
-  .portrait-video {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .portrait-video .video-stream {
-    width: auto !important;
+  .video-container:fullscreen .video-container-inner {
+    width: 100% !important;
     height: 100% !important;
-    max-width: 100%;
-    object-fit: cover; /* 화면을 꽉 채움 */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: black !important;
   }
 
-  /* 반응형: 작은 화면에서는 세로 영상이 너비에 맞춰지도록 */
-  @media (max-width: 768px) {
-    .portrait-video .video-stream {
-      width: 100% !important;
-      height: auto !important;
-      max-height: 100%;
-    }
+  .video-container:fullscreen .video-container-inner media-player {
+    width: 100% !important;
+    height: 100% !important;
+    display: block !important;
+  }
+
+  /* shadow DOM 안의 video까지 적용 (vidstack) */
+  .video-container:fullscreen .video-container-inner video,
+  .video-container:fullscreen video,
+  :global(.video-container:fullscreen) video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+  }
+
+  ::backdrop {
+    background-color: black !important;
   }
 </style>
 
@@ -329,11 +341,6 @@
               {/if}
             </span>
           {/if}
-          {#if currentLatency > 0}
-            <span class="text-xs px-2 py-1 rounded {currentLatency < 300 ? 'bg-green-100 text-green-800' : currentLatency < 1000 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}">
-              {currentLatency}ms
-            </span>
-          {/if}
         </div>
         <button
           on:click={leaveClass}
@@ -350,21 +357,56 @@
         <div class="lg:col-span-2">
           <div class="bg-white rounded-lg shadow p-4">
             <h2 class="text-lg font-semibold mb-4 text-gray-800">👨‍🏫 선생님 화면 (LiveKit 초저지연)</h2>
-            <div class="bg-gray-900 rounded-lg aspect-video flex items-center justify-center overflow-hidden relative {videoContainerClass}">
-              <!-- Video element with ultra-low latency settings - ALWAYS visible -->
-              <!-- svelte-ignore a11y-media-has-caption -->
-              <video
-                bind:this={videoElement}
-                class="video-stream"
-                autoplay
-                muted
-                playsinline
-                disablepictureinpicture
-              ></video>
+            <div 
+              bind:this={videoContainer}
+              class="bg-black rounded-lg overflow-hidden relative {videoContainerClass} video-container"
+              style="aspect-ratio: {videoAspectRatio}"
+            >
+              <div class="video-container-inner w-full h-full min-w-0 min-h-0">
+              {#if broadcastStream}
+                <media-player
+                  bind:this={mediaPlayerEl}
+                  src={{ src: broadcastStream, type: 'video/object' }}
+                  autoplay
+                  muted
+                  playsinline
+                  class="w-full h-full"
+                >
+                  <media-provider></media-provider>
+                  <media-video-layout></media-video-layout>
+                </media-player>
+              {/if}
+              </div>
+
+              <!-- PIP / 전체화면 버튼 -->
+              {#if isVideoLoaded && broadcastStream}
+                <div class="absolute bottom-3 right-3 z-40 flex gap-2">
+                  <button
+                    type="button"
+                    on:click={togglePip}
+                    class="p-2 rounded-lg bg-black/60 text-white hover:bg-black/80 transition"
+                    title="작은 창 (PIP)"
+                  >
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z"/></svg>
+                  </button>
+                  <button
+                    type="button"
+                    on:click={toggleFullscreen}
+                    class="p-2 rounded-lg bg-black/60 text-white hover:bg-black/80 transition"
+                    title="전체화면"
+                  >
+                    {#if isFullscreen}
+                      <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+                    {:else}
+                      <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                    {/if}
+                  </button>
+                </div>
+              {/if}
               
               <!-- Loading overlay - shows on top when video not loaded -->
               {#if !isVideoLoaded}
-                <div class="absolute inset-0 flex items-center justify-center text-center text-gray-400 bg-gray-900 bg-opacity-90">
+                <div class="absolute inset-0 z-50 flex items-center justify-center text-center text-gray-400 bg-gray-900 bg-opacity-90">
                   <div>
                     <div class="text-4xl mb-2">⏳</div>
                     <p>선생님 화면을 기다리는 중...</p>

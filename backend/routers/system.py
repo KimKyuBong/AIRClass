@@ -19,10 +19,9 @@ from utils import get_connection_manager
 
 # LiveKit API는 필요시 동적 import (순환 의존 방지)
 def get_livekit_api():
-    from routers.livekit import lkapi
+    from routers.livekit import get_livekit_api as _get_livekit_api
     from livekit import api
-
-    return lkapi, api
+    return _get_livekit_api(), api
 
 
 logger = logging.getLogger("uvicorn")
@@ -61,9 +60,12 @@ async def health_check():
     stream_active = False
     try:
         lkapi, api = get_livekit_api()
-        rooms = await lkapi.room.list_rooms(api.ListRoomsRequest())
-        if rooms.rooms:
-            stream_active = True
+        try:
+            rooms = await lkapi.room.list_rooms(api.ListRoomsRequest())
+            if rooms.rooms:
+                stream_active = True
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         logger.warning(f"Failed to check LiveKit status: {e}")
 
@@ -83,17 +85,20 @@ async def get_stream_status():
     """LiveKit 룸 목록 조회"""
     try:
         lkapi, api = get_livekit_api()
-        rooms = await lkapi.room.list_rooms(api.ListRoomsRequest())
-        return {
-            "rooms": [
-                {
-                    "name": room.name,
-                    "num_participants": room.num_participants,
-                    "creation_time": room.creation_time,
-                }
-                for room in rooms.rooms
-            ]
-        }
+        try:
+            rooms = await lkapi.room.list_rooms(api.ListRoomsRequest())
+            return {
+                "rooms": [
+                    {
+                        "name": room.name,
+                        "num_participants": room.num_participants,
+                        "creation_time": room.creation_time,
+                    }
+                    for room in rooms.rooms
+                ]
+            }
+        finally:
+            await lkapi.aclose()
     except Exception as e:
         logger.error(f"Failed to list LiveKit rooms: {e}")
         return {"rooms": [], "error": str(e)}

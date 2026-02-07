@@ -93,12 +93,14 @@ async def create_livekit_token(
         # JWT 생성
         jwt_token = token.to_jwt()
 
+        # 클라이언트용 URL: LIVEKIT_PUBLIC_URL만 사용 (도커 내부 IP 172.x 노출 방지)
+        livekit_url = os.getenv("LIVEKIT_PUBLIC_URL") or "ws://livekit:7880"
+        if livekit_url.startswith("ws://172.") or livekit_url.startswith("wss://172."):
+            # 172.16.0.0/12 (Docker 브리지 등)는 브라우저에서 접근 불가 → 기본값 사용
+            livekit_url = "ws://livekit:7880"
         return {
             "token": jwt_token,
-            "url": LIVEKIT_CLIENT_URL,  # Main 노드 URL (LiveKit이 자동 라우팅)
-            "room_name": room_name,
-            "identity": user_id,
-            "user_type": user_type,
+            "url": livekit_url,
         }
 
     except Exception as e:
