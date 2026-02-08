@@ -13,6 +13,7 @@ Utilities Package
 
 from .jwt_auth import (
     generate_stream_token,
+    generate_device_token,
     verify_token,
     revoke_token,
     get_active_token_count,
@@ -48,6 +49,7 @@ __all__ = [
     # "get_mediamtx_pid",
     # JWT Auth
     "generate_stream_token",
+    "generate_device_token",
     "verify_token",
     "revoke_token",
     "get_active_token_count",

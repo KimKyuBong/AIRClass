@@ -350,13 +350,44 @@ class ClusterManager:
 
 
 class SubNodeClient:
-    """Sub 노드에서 Main Node와 통신하는 클라이언트"""
+    """Sub 노드에서 Main Node와 통신하는 클라이언트. TOTP_SECRET 있으면 device 토큰으로 인증(Android와 동일)."""
 
     def __init__(self, main_node_url: str, node_info: NodeInfo):
         self.main_node_url = main_node_url.rstrip("/")
         self.node_info = node_info
         self.client = httpx.AsyncClient(timeout=5.0)
         self.heartbeat_task: Optional[asyncio.Task] = None
+        self._device_token: Optional[str] = None  # TOTP 모드일 때 캐시
+
+    def _use_device_token_auth(self) -> bool:
+        """TOTP_SECRET이 설정되어 있으면 device 토큰 인증 사용."""
+        return bool(os.getenv("TOTP_SECRET"))
+
+    async def _get_or_refresh_device_token(self) -> Optional[str]:
+        """TOTP 6자리로 device 토큰 발급(또는 캐시 반환). 실패 시 None."""
+        totp_secret = os.getenv("TOTP_SECRET")
+        if not totp_secret:
+            return None
+        try:
+            from core.totp_utils import get_current_totp_code
+            code = get_current_totp_code(totp_secret)
+            if not code:
+                return self._device_token  # 캐시라도 반환
+        except Exception as e:
+            logger.warning(f"TOTP code generation failed: {e}")
+            return self._device_token
+        try:
+            r = await self.client.post(
+                f"{self.main_node_url}/api/auth/device-token",
+                json={"totp_code": code},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                self._device_token = data.get("token")
+                return self._device_token
+        except Exception as e:
+            logger.warning(f"Device token request failed: {e}")
+        return self._device_token
 
     async def start(self):
         """Sub Node 클라이언트 시작"""
@@ -377,35 +408,48 @@ class SubNodeClient:
         await self.client.aclose()
 
     async def register(self) -> bool:
-        """Main Node에 등록 (HMAC 인증 포함)"""
+        """Main Node에 등록. TOTP_SECRET 있으면 device 토큰(Bearer), 없으면 CLUSTER_SECRET(HMAC)."""
         try:
-            # CLUSTER_SECRET 가져오기
-            cluster_secret = os.getenv("CLUSTER_SECRET", "")
-            if not cluster_secret:
-                logger.error("❌ CLUSTER_SECRET not set! Cannot register.")
-                return False
-
-            # datetime을 ISO string으로 변환
             node_dict = asdict(self.node_info)
-            timestamp = datetime.now().isoformat()
-            node_dict["last_heartbeat"] = timestamp
+            node_dict["last_heartbeat"] = datetime.now().isoformat()
 
-            # HMAC 인증 토큰 생성
-            auth_token = generate_cluster_auth_token(cluster_secret, timestamp)
-            node_dict["auth_token"] = auth_token
-            node_dict["timestamp"] = timestamp
-
-            response = await self.client.post(
-                f"{self.main_node_url}/cluster/register", json=node_dict
-            )
+            if self._use_device_token_auth():
+                token = await self._get_or_refresh_device_token()
+                if not token:
+                    logger.error("❌ TOTP 모드: device 토큰 발급 실패. TOTP_SECRET과 메인 노드 TOTP 설정을 확인하세요.")
+                    return False
+                headers = {"Authorization": f"Bearer {token}"}
+                # Bearer 사용 시 auth_token/timestamp/totp_code 제거
+                node_dict.pop("auth_token", None)
+                node_dict.pop("timestamp", None)
+                node_dict.pop("totp_code", None)
+                response = await self.client.post(
+                    f"{self.main_node_url}/cluster/register", json=node_dict, headers=headers
+                )
+                if response.status_code == 401:
+                    self._device_token = None
+                    token = await self._get_or_refresh_device_token()
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+                        response = await self.client.post(
+                            f"{self.main_node_url}/cluster/register", json=node_dict, headers=headers
+                        )
+            else:
+                cluster_secret = os.getenv("CLUSTER_SECRET", "")
+                if not cluster_secret:
+                    logger.error("❌ CLUSTER_SECRET not set! Cannot register.")
+                    return False
+                timestamp = datetime.now().isoformat()
+                node_dict["auth_token"] = generate_cluster_auth_token(cluster_secret, timestamp)
+                node_dict["timestamp"] = timestamp
+                response = await self.client.post(
+                    f"{self.main_node_url}/cluster/register", json=node_dict
+                )
 
             if response.status_code == 200:
                 return True
             elif response.status_code == 403:
-                logger.error("❌ Authentication failed: CLUSTER_SECRET mismatch!")
-                logger.error(
-                    "   Main 노드와 Sub 노드의 .env 파일에 같은 CLUSTER_SECRET을 설정하세요"
-                )
+                logger.error("❌ Authentication failed (CLUSTER_SECRET mismatch or invalid TOTP)")
                 return False
             else:
                 return False
@@ -415,39 +459,63 @@ class SubNodeClient:
             return False
 
     async def unregister(self) -> bool:
-        """Main Node에서 등록 해제"""
+        """Main Node에서 등록 해제. TOTP 모드면 Bearer, 아니면 HMAC(body에 auth_token+timestamp)."""
         try:
-            response = await self.client.post(
-                f"{self.main_node_url}/cluster/unregister",
-                json={"node_id": self.node_info.node_id},
-            )
+            payload = {"node_id": self.node_info.node_id}
+            if self._use_device_token_auth() and self._device_token:
+                response = await self.client.post(
+                    f"{self.main_node_url}/cluster/unregister",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._device_token}"},
+                )
+            else:
+                cluster_secret = os.getenv("CLUSTER_SECRET", "")
+                if cluster_secret:
+                    timestamp = datetime.now().isoformat()
+                    payload["auth_token"] = generate_cluster_auth_token(cluster_secret, timestamp)
+                    payload["timestamp"] = timestamp
+                response = await self.client.post(
+                    f"{self.main_node_url}/cluster/unregister", json=payload
+                )
             return response.status_code == 200
         except Exception as e:
             logger.error(f"❌ Unregistration failed: {e}")
             return False
 
     async def send_stats(self, stats: dict) -> bool:
-        """통계 정보 전송 (HMAC 인증 포함)"""
+        """통계 정보 전송. TOTP 모드면 Bearer, 아니면 HMAC."""
         try:
-            # CLUSTER_SECRET 가져오기
-            cluster_secret = os.getenv("CLUSTER_SECRET", "")
-            if not cluster_secret:
-                logger.error("❌ CLUSTER_SECRET not set!")
-                return False
-
-            # HMAC 인증 토큰 생성
-            timestamp = datetime.now().isoformat()
-            auth_token = generate_cluster_auth_token(cluster_secret, timestamp)
-
-            response = await self.client.post(
-                f"{self.main_node_url}/cluster/stats",
-                json={
-                    "node_id": self.node_info.node_id,
-                    "stats": stats,
-                    "auth_token": auth_token,
-                    "timestamp": timestamp,
-                },
-            )
+            payload = {"node_id": self.node_info.node_id, "stats": stats}
+            if self._use_device_token_auth():
+                if not self._device_token:
+                    self._device_token = await self._get_or_refresh_device_token()
+                if not self._device_token:
+                    return False
+                response = await self.client.post(
+                    f"{self.main_node_url}/cluster/stats",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._device_token}"},
+                )
+                if response.status_code == 401:
+                    self._device_token = None
+                    self._device_token = await self._get_or_refresh_device_token()
+                    if self._device_token:
+                        response = await self.client.post(
+                            f"{self.main_node_url}/cluster/stats",
+                            json=payload,
+                            headers={"Authorization": f"Bearer {self._device_token}"},
+                        )
+            else:
+                cluster_secret = os.getenv("CLUSTER_SECRET", "")
+                if not cluster_secret:
+                    logger.error("❌ CLUSTER_SECRET not set!")
+                    return False
+                timestamp = datetime.now().isoformat()
+                payload["auth_token"] = generate_cluster_auth_token(cluster_secret, timestamp)
+                payload["timestamp"] = timestamp
+                response = await self.client.post(
+                    f"{self.main_node_url}/cluster/stats", json=payload
+                )
             return response.status_code == 200
         except Exception as e:
             logger.error(f"❌ Stats send failed: {e}")
@@ -589,6 +657,8 @@ async def init_cluster_mode():
                 return
 
         logger.info(f"🔗 Starting in SUB NODE mode, connecting to {main_node_url}")
+        if os.getenv("TOTP_SECRET"):
+            logger.info("   인증: TOTP(device 토큰) 사용 — Android·앱과 동일한 방식")
 
         # 노드 정보 생성 (Docker 컨테이너 이름을 node_id로 사용)
         container_name = os.getenv("HOSTNAME", str(uuid.uuid4())[:8])

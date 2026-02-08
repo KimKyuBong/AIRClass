@@ -53,8 +53,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
     
-    // RTMP Streaming Library (RootEncoder)
-    implementation("com.github.pedroSG94.RootEncoder:library:2.5.2")
+    // LiveKit Android SDK (WebRTC 송출)
+    implementation("io.livekit:livekit-android:2.+")
     
     // QR Code Scanner (ZXing)
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

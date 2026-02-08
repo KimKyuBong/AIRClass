@@ -13,17 +13,30 @@ class WelcomeActivity : AppCompatActivity() {
 
         val devButton = findViewById<Button>(R.id.btnDev)
         val qrButton = findViewById<Button>(R.id.btnQR)
+        val mdnsButton = findViewById<Button>(R.id.btnMdns)
 
         devButton.setOnClickListener {
-            // DEV 모드: 수동 IP 입력 (기존 MainActivity로 이동)
+            // 테스트용: 자동으로 서버 IP 설정하고 접속 시도
+            val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+            prefs.edit().apply {
+                putString("server_ip", "10.120.184.119")
+                putString("node_password", "test")
+                apply()
+            }
+            
             val intent = Intent(this, MainActivity::class.java)
             intent.putExtra("mode", "dev")
+            intent.putExtra("auto_start", true) // 자동 시작 플래그
             startActivity(intent)
         }
 
         qrButton.setOnClickListener {
-            // QR 모드: QR 스캔으로 서버 연결
             val intent = Intent(this, QRScanActivity::class.java)
+            startActivity(intent)
+        }
+
+        mdnsButton.setOnClickListener {
+            val intent = Intent(this, MdnsDiscoveryActivity::class.java)
             startActivity(intent)
         }
     }

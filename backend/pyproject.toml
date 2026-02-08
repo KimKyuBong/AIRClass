@@ -46,6 +46,9 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["core", "routers", "utils", "schemas", "services"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

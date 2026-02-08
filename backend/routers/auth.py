@@ -15,7 +15,8 @@ from fastapi import APIRouter, HTTPException
 import httpx
 from core.cluster import cluster_manager
 from core.metrics import tokens_issued_total
-from utils import generate_stream_token, JWT_EXPIRATION_MINUTES
+from fastapi import Body
+from utils import generate_stream_token, generate_device_token, JWT_EXPIRATION_MINUTES
 from config import SERVER_IP
 
 logger = logging.getLogger("uvicorn")
@@ -160,3 +161,36 @@ async def create_token_cluster_aware(
     }
 
     return response_data
+
+
+# TOTP 검증 후 디바이스(Android 송신 앱 등) 연동용 단기 토큰
+DEVICE_TOKEN_EXPIRES_MINUTES = 15
+
+
+@router.post("/auth/device-token")
+async def create_device_token(totp_code: str = Body(..., embed=True)):
+    """
+    TOTP 6자리 코드 검증 후 디바이스 연동용 JWT 발급.
+    Android 송신 앱 등에서 앱에 등록한 TOTP 코드를 보내면 단기 토큰을 반환.
+    """
+    import os
+    totp_secret = os.getenv("TOTP_SECRET")
+    if not totp_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="TOTP not configured. Set TOTP_SECRET in .env (e.g. via GUI first-time setup).",
+        )
+    try:
+        from core.totp_utils import verify_totp_code
+    except ImportError:
+        raise HTTPException(status_code=503, detail="TOTP not available (pyotp not installed)")
+
+    if not verify_totp_code(totp_secret, totp_code):
+        raise HTTPException(status_code=403, detail="Invalid or expired TOTP code")
+
+    token = generate_device_token(expires_minutes=DEVICE_TOKEN_EXPIRES_MINUTES)
+    return {
+        "token": token,
+        "expires_in_minutes": DEVICE_TOKEN_EXPIRES_MINUTES,
+        "scope": "device",
+    }

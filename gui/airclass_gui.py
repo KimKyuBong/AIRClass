@@ -760,6 +760,14 @@ class SetupWizard(ctk.CTkToplevel):
 
         jwt_secret = secrets.token_hex(32)
 
+        # TOTP 시크릿 생성 (Sub 등록·Android 연동 시 6자리 코드 검증용, QR로 앱에 등록)
+        try:
+            import pyotp
+            totp_secret = pyotp.random_base32()
+        except ImportError:
+            import base64
+            totp_secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
         # .env 파일 생성 (docker-compose에서 기본값 없으므로 필요한 변수 전부 기입)
         env_content = f"""# AIRClass 서버 설정 파일 (GUI로 생성)
 # 서버(인터페이스) IP - 접속 URL·LiveKit URL 등 모두 이 주소 기준
@@ -768,6 +776,8 @@ VITE_BACKEND_URL=http://{server_ip}:8000
 CORS_ORIGINS=*
 JWT_SECRET_KEY={jwt_secret}
 CLUSTER_SECRET={cluster_secret}
+# TOTP 시크릿 (Sub 등록·디바이스 연동 시 6자리 코드 검증). 서버 기동 후 /cluster/totp-setup 에서 QR 스캔
+TOTP_SECRET={totp_secret}
 
 # MongoDB
 MONGO_USERNAME=airclass
@@ -795,9 +805,8 @@ USE_MAIN_WEBRTC=false
         with open(self.parent.env_file, "w", encoding="utf-8") as f:
             f.write(env_content)
 
-        messagebox.showinfo(
-            "설정 완료", "설정이 저장되었습니다!\n이제 '서버 시작' 버튼을 클릭하세요."
-        )
+        msg = "설정이 저장되었습니다!\n\n이제 '서버 시작' 버튼을 클릭한 뒤,\nTOTP 앱 등록: 서버 주소/cluster/totp-setup 에서 QR 스캔하세요.\n(Sub 등록·Android 연동 시 6자리 코드 사용)"
+        messagebox.showinfo("설정 완료", msg)
 
         self.parent.load_config()
         self.destroy()

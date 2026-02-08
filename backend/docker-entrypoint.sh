@@ -41,6 +41,21 @@ fi
 # echo "📡 Starting MediaMTX..."
 # ./mediamtx "$CONFIG_FILE" &
 
+# LiveKit Server 시작 (백그라운드)
+echo "📡 Starting LiveKit Server..."
+mkdir -p /app/configs
+export SERVER_IP=${SERVER_IP:-127.0.0.1}
+python3 -c "
+from core.livekit_config import create_livekit_config
+config = create_livekit_config('main', 'main')
+with open('/app/configs/livekit.yaml', 'w') as f:
+    import yaml
+    yaml.dump(config, f)
+"
+${LIVEKIT_BINARY:-/usr/local/bin/livekit-server} --config /app/configs/livekit.yaml &
+LIVEKIT_PID=$!
+echo "✅ LiveKit Server started (PID: $LIVEKIT_PID)"
+
 # FastAPI 시작 (포그라운드로 실행)
 echo "🐍 Starting FastAPI in foreground..."
 exec uvicorn main:app --host 0.0.0.0 --port 8000

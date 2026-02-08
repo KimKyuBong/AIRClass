@@ -5,6 +5,7 @@ LiveKit JWT 토큰 발급 및 Room 관리
 
 from fastapi import APIRouter, HTTPException, Query
 from livekit.api import AccessToken, VideoGrants
+from livekit.api import CreateIngressRequest, IngressInput
 from livekit import api
 import os
 
@@ -33,11 +34,12 @@ def get_livekit_api() -> api.LiveKitAPI:
     )
 
 
-@router.post("/token")
+@router.api_route("/token", methods=["GET", "POST"])
 async def create_livekit_token(
     user_id: str = Query(..., description="사용자 ID (고유)"),
     room_name: str = Query(..., description="방 이름 (예: math_class_101)"),
     user_type: str = Query(..., description="사용자 타입: teacher 또는 student"),
+    emulator: bool = Query(False, description="Android 에뮬레이터 여부 (true이면 10.0.2.2 반환)"),
 ):
     """
     LiveKit JWT 토큰 발급
@@ -93,11 +95,14 @@ async def create_livekit_token(
         # JWT 생성
         jwt_token = token.to_jwt()
 
-        # 클라이언트용 URL: LIVEKIT_PUBLIC_URL만 사용 (도커 내부 IP 172.x 노출 방지)
-        livekit_url = os.getenv("LIVEKIT_PUBLIC_URL") or "ws://livekit:7880"
-        if livekit_url.startswith("ws://172.") or livekit_url.startswith("wss://172."):
-            # 172.16.0.0/12 (Docker 브리지 등)는 브라우저에서 접근 불가 → 기본값 사용
-            livekit_url = "ws://livekit:7880"
+        # Android 에뮬레이터용 임시 매핑: 10.0.2.2 (에뮬레이터의 호스트 게이트웨이)
+        if emulator:
+            livekit_url = "ws://10.0.2.2:7880"
+        else:
+            # 일반 클라이언트: SERVER_IP 사용
+            server_ip = os.getenv("SERVER_IP", "").strip() or "localhost"
+            livekit_url = f"ws://{server_ip}:7880"
+        
         return {
             "token": jwt_token,
             "url": livekit_url,
@@ -244,3 +249,50 @@ async def remove_participant(room_name: str, identity: str):
             await lkapi.aclose()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to remove participant: {str(e)}")
+
+
+@router.post("/android-rtmp-url")
+async def create_android_rtmp_ingress(
+    room_name: str = Query("class", description="LiveKit 방 이름 (기본: class)"),
+):
+    """
+    Android 앱용 RTMP 송출 URL 발급 (LiveKit Ingress).
+
+    CreateIngress로 room에 퍼블리시할 RTMP URL을 생성합니다.
+    앱은 이 URL로 송출하면 LiveKit room "class"에 화면이 표시됩니다.
+
+    Returns:
+        {
+            "rtmp_url": "rtmp://SERVER_IP:1935/live/STREAM_KEY",  # 앱에서 그대로 사용
+            "stream_key": "STREAM_KEY",
+            "room_name": "class"
+        }
+    """
+    try:
+        lkapi = get_livekit_api()
+        try:
+            req = CreateIngressRequest(
+                input_type=IngressInput.RTMP_INPUT,
+                name="android",
+                room_name=room_name,
+                participant_identity="android",
+                participant_name="Android",
+                enable_transcoding=True,
+            )
+            info = await lkapi.ingress.create_ingress(req)
+            # 단일 URL: url이 rtmp://host:1935/live 이고 stream_key가 키일 때, 전체는 url/stream_key
+            base = (info.url or "").rstrip("/")
+            sk = info.stream_key or ""
+            rtmp_url = f"{base}/{sk}" if sk else base
+            return {
+                "rtmp_url": rtmp_url,
+                "stream_key": sk,
+                "room_name": room_name,
+            }
+        finally:
+            await lkapi.aclose()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Android RTMP URL 발급 실패 (Ingress 서비스 확인): {str(e)}",
+        )

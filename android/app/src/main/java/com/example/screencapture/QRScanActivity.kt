@@ -39,10 +39,12 @@ class QRScanActivity : AppCompatActivity() {
                 
                 Toast.makeText(this, "서버 연결: $serverIp", Toast.LENGTH_SHORT).show()
                 
-                // MainActivity로 이동하여 자동 시작
-                val intent = Intent(this, MainActivity::class.java)
-                intent.putExtra("mode", "qr")
-                intent.putExtra("auto_start", true)
+                // TOTP 인증 후 MainActivity로 이동 (자동 시작 옵션 전달)
+                val intent = Intent(this, TotpAuthActivity::class.java).apply {
+                    putExtra(TotpAuthActivity.EXTRA_SERVER_IP, serverIp)
+                    putExtra(TotpAuthActivity.EXTRA_SERVER_PORT, 8000)
+                    putExtra("auto_start", true)
+                }
                 startActivity(intent)
                 finish()
             } else {

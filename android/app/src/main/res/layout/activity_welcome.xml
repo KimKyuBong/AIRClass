@@ -44,7 +44,18 @@
         android:text="📷 QR 스캔으로 연결"
         android:textSize="18sp"
         android:padding="16dp"
+        android:layout_marginBottom="16dp"
         android:backgroundTint="#4CAF50"/>
+
+    <!-- mDNS Search Button -->
+    <Button
+        android:id="@+id/btnMdns"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="🔍 자동 검색 (mDNS)"
+        android:textSize="18sp"
+        android:padding="16dp"
+        android:backgroundTint="#2196F3"/>
 
     <!-- Info Text -->
     <TextView

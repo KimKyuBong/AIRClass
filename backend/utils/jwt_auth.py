@@ -49,6 +49,22 @@ def generate_stream_token(user_type: str, user_id: str, action: str = "read") ->
     return token
 
 
+def generate_device_token(expires_minutes: int = 15) -> str:
+    """
+    TOTP 검증 후 발급하는 디바이스(Android 등) 연동용 단기 JWT.
+    payload에 scope: "device" 포함.
+    """
+    expiration = datetime.now(UTC) + timedelta(minutes=expires_minutes)
+    payload = {
+        "scope": "device",
+        "exp": expiration,
+        "iat": datetime.now(UTC),
+    }
+    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    _active_tokens.add(token)
+    return token
+
+
 def verify_token(token: str) -> Optional[dict]:
     """
     토큰 검증

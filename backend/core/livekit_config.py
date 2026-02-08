@@ -118,14 +118,15 @@ class LiveKitConfigGenerator:
             },
             "room": {
                 "auto_create": True,
-                "empty_timeout": 300,  # 5분
+                "empty_timeout": 0,  # 무제한 (개발 환경용)
                 "max_participants": 200,
             },
             "rtc": {
                 "port_range_start": ports["rtc_start"],
                 "port_range_end": ports["rtc_end"],
                 "use_external_ip": False,
-                "node_ip": os.getenv("LIVEKIT_ADVERTISE_IP", "127.0.0.1"),
+                # 외부 주입 SERVER_IP 그대로 사용 (같은 IP로 WebSocket + 미디어)
+                "node_ip": os.getenv("SERVER_IP") or "127.0.0.1",
             },
             # 고화질 전송을 위한 제한 해제 (60Mbps+ 허용)
             "limit": {
@@ -144,6 +145,12 @@ class LiveKitConfigGenerator:
             if os.getenv("TURN_ENABLED", "false").lower() == "true"
             else {},
         }
+
+        # Ingress (Android RTMP 송출용) - 메인 노드에서 LIVEKIT_INGRESS_RTMP_BASE_URL 설정 시
+        rtmp_base = os.getenv("LIVEKIT_INGRESS_RTMP_BASE_URL", "").strip()
+        if rtmp_base:
+            config["ingress"] = {"rtmp_base_url": rtmp_base}
+            logger.info(f"Ingress RTMP base URL set: {rtmp_base}")
 
         return config
 

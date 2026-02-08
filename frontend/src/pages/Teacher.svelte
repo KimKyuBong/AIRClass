@@ -171,7 +171,7 @@
       
       // 2. Get LiveKit token from backend
       console.log('[Teacher] Fetching LiveKit token...');
-      const response = await fetch(`/api/livekit/token?user_id=Teacher&room_name=class&user_type=teacher`, { method: 'POST' });
+      const response = await fetch(`/api/livekit/token?user_id=Teacher&room_name=class&user_type=teacher&emulator=true`, { method: 'POST' });
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`토큰 발급 실패: ${errorText}`);
@@ -325,7 +325,7 @@
 
     try {
       console.log('[Teacher] Fetching LiveKit token for viewer mode...');
-      const response = await fetch(`/api/livekit/token?user_id=Teacher&room_name=class&user_type=teacher`, { method: 'POST' });
+      const response = await fetch(`/api/livekit/token?user_id=Teacher&room_name=class&user_type=teacher&emulator=true`, { method: 'POST' });
       if (!response.ok) throw new Error('Failed to get token');
       
       const { token, url } = await response.json();

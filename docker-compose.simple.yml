@@ -2,8 +2,6 @@
 # 클러스터 없이 단일 서버로 빠르게 테스트
 # 사용법: docker-compose -f docker-compose.simple.yml up
 
-version: '3.8'
-
 services:
   airclass:
     build:

@@ -247,23 +247,45 @@ class MultiDiscoveryManager:
     async def advertise_main_node(self, port: int = 8000, node_name: str = "main"):
         """
         메인 노드를 mDNS로 광고
-        (mDNS가 차단되어도 다른 발견 방법이 작동하므로 선택사항)
+        Docker 등에서는 SERVER_IP(호스트 IP)를 광고해야 앱에서 검색 가능.
         """
+        import os
+
         try:
             from zeroconf import ServiceInfo, Zeroconf
+        except ImportError:
+            logger.info("ℹ️  zeroconf 미설치 - mDNS 비활성화 (pip install zeroconf)")
+            return None
 
-            local_ip = self._get_local_ip()
+        # Docker/호스트 환경: SERVER_IP가 설정되어 있으면 그 IP로 광고 (Android가 같은 LAN에서 접근 가능)
+        server_ip = os.getenv("SERVER_IP", "").strip()
+        if server_ip and server_ip not in ("localhost", "127.0.0.1"):
+            advertise_ip = server_ip
+            logger.info(f"📡 mDNS 광고 시도 (SERVER_IP 사용): {advertise_ip}:{port}")
+        else:
+            advertise_ip = self._get_local_ip()
+            if advertise_ip == "127.0.0.1":
+                logger.warning("⚠️ mDNS: 로컬 IP를 127.0.0.1로 감지. .env에 SERVER_IP(호스트 LAN IP) 설정 시 앱 검색 가능")
+            logger.info(f"📡 mDNS 광고 시도 (자동 감지): {advertise_ip}:{port}")
+
+        try:
+            try:
+                addr_bytes = socket.inet_aton(advertise_ip)
+            except OSError:
+                # 호스트명이면 DNS로 해석
+                advertise_ip = socket.gethostbyname(advertise_ip)
+                addr_bytes = socket.inet_aton(advertise_ip)
 
             info = ServiceInfo(
                 "_airclass._tcp.local.",
                 f"{node_name}._airclass._tcp.local.",
-                addresses=[socket.inet_aton(local_ip)],
+                addresses=[addr_bytes],
                 port=port,
                 properties={
                     "role": "main",
                     "name": node_name,
                     "version": "2.0.0",
-                    "ip": local_ip,
+                    "ip": advertise_ip,
                 },
                 server=f"{node_name}.local.",
             )
@@ -271,14 +293,11 @@ class MultiDiscoveryManager:
             zeroconf = Zeroconf()
             zeroconf.register_service(info)
 
-            logger.info(f"📡 mDNS 광고 시작: {node_name} at {local_ip}:{port}")
-            logger.info("   (mDNS가 차단되어도 다른 발견 방법이 작동합니다)")
+            logger.info(f"✅ mDNS 광고 시작됨: 서비스 타입=_airclass._tcp.local. 주소={advertise_ip}:{port}")
+            logger.info("   (같은 Wi‑Fi의 Android 앱에서 '자동 검색(mDNS)'으로 이 서버가 보여야 합니다)")
 
             return zeroconf  # 종료 시 close() 호출 필요
 
-        except ImportError:
-            logger.info("ℹ️  zeroconf 미설치 - mDNS 비활성화 (다른 발견 방법 사용)")
-            return None
         except Exception as e:
             logger.warning(f"⚠️ mDNS 광고 실패: {e} (다른 발견 방법 사용)")
             return None

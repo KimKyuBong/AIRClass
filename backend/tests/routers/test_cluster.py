@@ -40,14 +40,14 @@ def client(app):
 
 @pytest.fixture
 def mock_node_data():
-    """Mock Sub Node 등록 데이터"""
+    """Mock Sub Node 등록 데이터 (NodeInfo 필드와 일치)"""
     return {
         "node_id": "sub-test-001",
         "node_name": "Test Sub Node 1",
         "host": "10.100.0.10",
         "port": 8001,
-        "rtmp_port": 1936,
-        "webrtc_port": 8890,
+        "livekit_port": 7890,
+        "livekit_ws_port": 7890,
         "max_connections": 150,
         "current_connections": 5,
         "cpu_usage": 20.0,
@@ -206,13 +206,16 @@ def test_register_node_sub_mode_forbidden(client, mock_node_data):
 # ==================== Node Unregistration Tests ====================
 
 
-@patch.dict("os.environ", {"MODE": "main"})
+@patch.dict("os.environ", {"MODE": "main", "CLUSTER_SECRET": "test_secret_key"})
 @patch("routers.cluster.cluster_manager")
 def test_unregister_node_success(mock_cluster_manager, client):
-    """노드 등록 해제 성공"""
+    """노드 등록 해제 성공 (HMAC 인증)"""
     mock_cluster_manager.unregister_node.return_value = True
+    timestamp = str(int(time.time()))
+    auth_token = generate_hmac_token("test_secret_key", timestamp)
+    payload = {"node_id": "sub-test-001", "auth_token": auth_token, "timestamp": timestamp}
 
-    response = client.post("/cluster/unregister", json={"node_id": "sub-test-001"})
+    response = client.post("/cluster/unregister", json=payload)
 
     assert response.status_code == 200
     data = response.json()
@@ -223,13 +226,16 @@ def test_unregister_node_success(mock_cluster_manager, client):
     mock_cluster_manager.unregister_node.assert_called_once_with("sub-test-001")
 
 
-@patch.dict("os.environ", {"MODE": "main"})
+@patch.dict("os.environ", {"MODE": "main", "CLUSTER_SECRET": "test_secret_key"})
 @patch("routers.cluster.cluster_manager")
 def test_unregister_node_not_found(mock_cluster_manager, client):
     """노드 등록 해제 실패: 존재하지 않는 노드"""
     mock_cluster_manager.unregister_node.return_value = False
+    timestamp = str(int(time.time()))
+    auth_token = generate_hmac_token("test_secret_key", timestamp)
+    payload = {"node_id": "nonexistent", "auth_token": auth_token, "timestamp": timestamp}
 
-    response = client.post("/cluster/unregister", json={"node_id": "nonexistent"})
+    response = client.post("/cluster/unregister", json=payload)
 
     assert response.status_code == 404
     assert "Node not found" in response.json()["detail"]
@@ -314,7 +320,7 @@ def test_update_node_stats_missing_auth(client):
     response = client.post("/cluster/stats", json=payload)
 
     assert response.status_code == 403
-    assert "Authentication required" in response.json()["detail"]
+    assert "Authentication failed" in response.json()["detail"]
 
 
 @patch.dict("os.environ", {"MODE": "main", "CLUSTER_SECRET": "test_secret_key"})
@@ -341,7 +347,7 @@ def test_update_node_stats_node_not_found(mock_cluster_manager, client):
 
 @patch.dict("os.environ", {"MODE": "main", "CLUSTER_SECRET": ""})
 def test_update_node_stats_no_cluster_secret(client):
-    """통계 업데이트 실패: CLUSTER_SECRET 미설정"""
+    """통계 업데이트 실패: CLUSTER_SECRET 미설정 시 HMAC 검증 실패로 403"""
     timestamp = str(int(time.time()))
     auth_token = "any_token"
 
@@ -354,8 +360,8 @@ def test_update_node_stats_no_cluster_secret(client):
 
     response = client.post("/cluster/stats", json=payload)
 
-    assert response.status_code == 500
-    assert "Server configuration error" in response.json()["detail"]
+    assert response.status_code == 403
+    assert "Authentication failed" in response.json()["detail"]
 
 
 @patch.dict("os.environ", {"MODE": "standalone"})

@@ -19,6 +19,7 @@
   let isPortraitVideo = false; // 세로 모드 영상 여부
   let videoContainerClass = ''; // 동적 컨테이너 클래스
   let videoContainer = null;
+  let videoElement = null;
   let mediaPlayerEl = null;
   let videoAspectRatio = '16/9';
   let showVideoControls = false;
@@ -73,7 +74,11 @@
 
     try {
       console.log('[Student] Joining class...');
-      const response = await fetch(`/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student`, { method: 'POST' });
+      // Detect if running in Android emulator
+      const isEmulator = window.location.hostname === '10.0.2.2' || 
+                        /Android.*Emulator|wv/.test(navigator.userAgent);
+      const emulatorParam = isEmulator ? '&emulator=true' : '';
+      const response = await fetch(`/api/livekit/token?user_id=${encodeURIComponent(studentName)}&room_name=class&user_type=student${emulatorParam}`, { method: 'POST' });
       if (!response.ok) throw new Error('Failed to get token');
       
       const { token, url } = await response.json();
@@ -84,18 +89,40 @@
         await new Promise((r) => setTimeout(r, 150));
       }
 
-      livekitRoom = new Room();
-      await livekitRoom.connect(url, token);
-      console.log('[Student] Connected to LiveKit room');
+      livekitRoom = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
+
+      // Connection state monitoring
+      livekitRoom.on(RoomEvent.ConnectionStateChanged, (state) => {
+        console.log('[Student] LiveKit connection state:', state);
+      });
+
+      console.log('[Student] Connecting to LiveKit...', { url, token: token.substring(0, 10) + '...' });
+      try {
+        await livekitRoom.connect(url, token);
+        console.log('[Student] Connected to LiveKit room');
+        isJoined = true;
+        connectWebSocket();
+      } catch (e) {
+        console.error('[Student] LiveKit connection failed:', e);
+        error = `LiveKit 연결 실패: ${e.message}`;
+        isLoading = false;
+        return;
+      }
       
-      isJoined = true;
-      connectWebSocket();
-      
-      livekitRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      livekitRoom.on(RoomEvent.TrackSubscribed, async (track, publication, participant) => {
         console.log('[Student] Track subscribed:', track.kind, 'from', participant.identity);
         if (track.kind === 'video') {
           broadcastStream = new MediaStream([track.mediaStreamTrack]);
           isVideoLoaded = true;
+          
+          await tick();
+          if (videoElement) {
+            track.attach(videoElement);
+            console.log('[Student] Track attached to video element');
+          }
           
           // Detect aspect ratio
           const videoTrack = track.mediaStreamTrack;
@@ -107,21 +134,45 @@
         }
       });
 
+      livekitRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+        if (track.kind === 'video') {
+          track.detach(videoElement);
+          if (broadcastStream) {
+            broadcastStream = null;
+            isVideoLoaded = false;
+          }
+        }
+      });
+
       // Handle existing tracks
-      livekitRoom.remoteParticipants.forEach(participant => {
-        participant.trackPublications.forEach(publication => {
-          if (publication.isSubscribed && publication.track?.kind === 'video') {
-            broadcastStream = new MediaStream([publication.track.mediaStreamTrack]);
+      console.log('[Student] Checking existing tracks, remoteParticipants:', livekitRoom.remoteParticipants.size);
+      for (const participant of livekitRoom.remoteParticipants.values()) {
+        console.log('[Student] Participant:', participant.identity, 'trackPublications:', participant.trackPublications?.size || 0);
+        for (const publication of participant.trackPublications.values()) {
+          console.log('[Student] Publication:', publication.trackName, 'isSubscribed:', publication.isSubscribed, 'hasTrack:', !!publication.track);
+          
+          if (publication.isSubscribed && publication.track) {
+            const track = publication.track;
+            broadcastStream = new MediaStream([track.mediaStreamTrack]);
             isVideoLoaded = true;
             
-            const settings = publication.track.mediaStreamTrack.getSettings();
+            await tick();
+            if (videoElement) {
+              track.attach(videoElement);
+              console.log('[Student] Existing track attached to video element');
+            }
+            
+            const settings = track.mediaStreamTrack.getSettings();
             if (settings.width && settings.height) {
               videoAspectRatio = `${settings.width}/${settings.height}`;
               isPortraitVideo = settings.height > settings.width;
             }
+          } else if (!publication.isSubscribed) {
+            console.log('[Student] Track not subscribed yet, subscribing:', publication.trackSid);
+            await publication.subscribe();
           }
-        });
-      });
+        }
+      }
       
     } catch (error) {
       console.error('[Student] Join failed:', error);
@@ -374,19 +425,14 @@
               role="presentation"
             >
               <div class="video-container-inner w-full h-full min-w-0 min-h-0 flex items-center justify-center">
-              {#if broadcastStream}
-                <media-player
-                  bind:this={mediaPlayerEl}
-                  src={{ src: broadcastStream, type: 'video/object' }}
+                <video
+                  bind:this={videoElement}
                   autoplay
                   muted
                   playsinline
-                  class="w-full h-full"
-                >
-                  <media-provider></media-provider>
-                  <media-video-layout></media-video-layout>
-                </media-player>
-              {/if}
+                  class="w-full h-full object-contain bg-black"
+                  class:hidden={!broadcastStream}
+                ></video>
               </div>
 
               <!-- PIP / 전체화면 버튼 -->

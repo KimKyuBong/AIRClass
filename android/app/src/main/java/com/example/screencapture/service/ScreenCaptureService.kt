@@ -38,8 +38,17 @@ import android.view.ContextThemeWrapper
 import androidx.core.app.NotificationCompat
 import kotlin.math.abs
 import com.example.screencapture.R
-import com.pedro.common.ConnectChecker
-import com.pedro.library.rtmp.RtmpDisplay
+import io.livekit.android.ConnectOptions
+import io.livekit.android.LiveKit
+import io.livekit.android.room.Room
+import io.livekit.android.room.track.screencapture.ScreenCaptureParams
+import io.livekit.android.events.RoomEvent
+import io.livekit.android.events.collect
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
@@ -47,8 +56,11 @@ import android.view.animation.AccelerateDecelerateInterpolator
 import android.graphics.PointF
 import kotlin.math.cos
 import kotlin.math.sin
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
-class ScreenCaptureService : Service(), ConnectChecker {
+class ScreenCaptureService : Service() {
 
     companion object {
         private const val TAG = "ScreenCaptureService"
@@ -74,22 +86,13 @@ class ScreenCaptureService : Service(), ConnectChecker {
         const val STATUS_DISCONNECTED = "disconnected"
     }
 
-    private lateinit var rtmpDisplay: RtmpDisplay
+    private var room: Room? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var liveKitUrl = ""
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = 0
-    private var rtmpUrl = ""
     private var isStreaming = false
-    
-    // Performance monitoring
-    private var frameCount = 0
-    private var droppedFrames = 0
-    private var lastFrameTime = 0L
-    private var lastStatsTime = 0L
-    private var totalEncodingTime = 0L
-    private var encodingCount = 0
-    private val frameTimeList = mutableListOf<Long>()
-    private val performanceHandler = android.os.Handler(Looper.getMainLooper())
     
     // MediaProjection 정보 저장 (해상도 변경 시 재사용)
     private var savedResultCode: Int = -1
@@ -98,14 +101,129 @@ class ScreenCaptureService : Service(), ConnectChecker {
     // Reconnection logic
     private var isIntentionalStop = false
     private var retryCount = 0
-    private val maxRetryDelay = 30000L // Max delay 30 seconds
+
+    /**
+     * 메인 노드에서 LiveKit 토큰 발급 (WebRTC 송출용).
+     * serverIp는 "host" 또는 "host:port" 형식.
+     */
+    private fun fetchLiveKitToken(serverIp: String): Pair<String, String>? {
+        Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        Log.d(TAG, "🌐 fetchLiveKitToken() 시작")
+        Log.d(TAG, "📥 입력 서버 주소: $serverIp")
+        
+        val (host, port) = if (serverIp.contains(":")) {
+            val parts = serverIp.split(":", limit = 2)
+            parts[0] to (parts.getOrNull(1)?.toIntOrNull() ?: 8000)
+        } else {
+            serverIp to 8000
+        }
+        Log.d(TAG, "📍 파싱 결과 - host=$host, port=$port")
+        
+        var conn: HttpURLConnection? = null
+        try {
+            val url = URL("http://$host:$port/api/livekit/token?user_id=android&room_name=class&user_type=teacher&emulator=true")
+            Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            Log.d(TAG, "🔗 HTTP 요청 시작")
+            Log.d(TAG, "   방식: GET")
+            Log.d(TAG, "   URL: $url")
+            Log.d(TAG, "   타임아웃: connect=5000ms, read=5000ms")
+            
+            conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            
+            // 로컬 및 원격 주소 로깅
+            Log.d(TAG, "⏳ 연결 시도 중...")
+            val startTime = System.currentTimeMillis()
+            conn.connect()
+            val connectTime = System.currentTimeMillis() - startTime
+            Log.d(TAG, "✅ TCP 연결 성공 (${connectTime}ms)")
+            
+            val responseCode = conn.responseCode
+            val responseMessage = conn.responseMessage
+            Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            Log.d(TAG, "📡 HTTP 응답 수신")
+            Log.d(TAG, "   상태 코드: $responseCode")
+            Log.d(TAG, "   상태 메시지: $responseMessage")
+            Log.d(TAG, "   Content-Type: ${conn.contentType}")
+            Log.d(TAG, "   Content-Length: ${conn.contentLength}")
+            
+            if (responseCode != 200) {
+                Log.e(TAG, "❌ HTTP 에러 응답")
+                val errorBody = conn.errorStream?.bufferedReader()?.use { it.readText() }
+                Log.e(TAG, "   에러 본문: $errorBody")
+                return null
+            }
+            
+            val body = conn.inputStream?.bufferedReader()?.use { it.readText() } ?: run {
+                Log.e(TAG, "❌ 응답 본문이 비어있음")
+                return null
+            }
+            Log.d(TAG, "📦 응답 본문 길이: ${body.length} bytes")
+            Log.d(TAG, "📦 응답 본문 (처음 200자): ${body.take(200)}...")
+            
+            val json = JSONObject(body)
+            Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            Log.d(TAG, "🔍 JSON 파싱 시작")
+            
+            val token = json.optString("token", "").takeIf { it.isNotBlank() } ?: run {
+                Log.e(TAG, "❌ 토큰이 응답에 없음")
+                Log.e(TAG, "   JSON 키: ${json.keys().asSequence().toList()}")
+                return null
+            }
+            
+            val serverUrl = json.optString("url", "")
+            Log.d(TAG, "✅ 토큰 추출 성공")
+            Log.d(TAG, "   토큰 길이: ${token.length} chars")
+            Log.d(TAG, "   토큰 앞부분: ${token.take(50)}...")
+            Log.d(TAG, "   서버 응답 URL: $serverUrl")
+            
+            // 사용자가 입력한 주소로 LiveKit 연결 (서버 응답 url 무시)
+            val wsUrl = "ws://$host:7880"
+            Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            Log.d(TAG, "🎯 WebSocket 연결 정보")
+            Log.d(TAG, "   사용할 주소: $wsUrl")
+            Log.d(TAG, "   (서버 응답 URL은 무시: $serverUrl)")
+            Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            
+            return token to wsUrl
+        } catch (e: java.net.UnknownHostException) {
+            Log.e(TAG, "❌ DNS 조회 실패")
+            Log.e(TAG, "   호스트: $host")
+            Log.e(TAG, "   에러: ${e.message}")
+            e.printStackTrace()
+            return null
+        } catch (e: java.net.ConnectException) {
+            Log.e(TAG, "❌ TCP 연결 실패")
+            Log.e(TAG, "   대상: $host:$port")
+            Log.e(TAG, "   에러: ${e.message}")
+            e.printStackTrace()
+            return null
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e(TAG, "❌ 연결 타임아웃")
+            Log.e(TAG, "   대상: $host:$port")
+            Log.e(TAG, "   에러: ${e.message}")
+            e.printStackTrace()
+            return null
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 예상치 못한 에러")
+            Log.e(TAG, "   타입: ${e.javaClass.simpleName}")
+            Log.e(TAG, "   메시지: ${e.message}")
+            e.printStackTrace()
+            return null
+        } finally {
+            conn?.disconnect()
+            Log.d(TAG, "🔌 HTTP 연결 종료")
+            Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        }
+    }
+
     private val reconnectHandler = android.os.Handler(Looper.getMainLooper())
     private val reconnectRunnable = Runnable {
-        if (isStreaming && !isIntentionalStop) {
+        if (isStreaming && !isIntentionalStop && savedResultCode != -1 && savedData != null) {
             Log.d(TAG, "🔄 Executing reconnection attempt #$retryCount")
-            if (!rtmpDisplay.isStreaming) {
-                rtmpDisplay.startStream(rtmpUrl)
-            }
+            startStream(savedResultCode, savedData!!)
         }
     }
 
@@ -167,11 +285,8 @@ class ScreenCaptureService : Service(), ConnectChecker {
         super.onCreate()
         initScreenMetrics()
         createNotificationChannel()
-        
-        rtmpDisplay = RtmpDisplay(baseContext, true, this)
-        rtmpDisplay.getStreamClient().setReTries(999) 
-        
-        Log.d(TAG, "Service created")
+        LiveKit.init(applicationContext)
+        Log.d(TAG, "Service created (WebRTC/LiveKit)")
     }
 
     private fun initScreenMetrics() {
@@ -215,121 +330,195 @@ class ScreenCaptureService : Service(), ConnectChecker {
             }
             
             val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
-            val serverIp = prefs.getString("server_ip", "192.168.0.12") ?: "192.168.0.12"
-            val nodePassword = prefs.getString("node_password", "test") ?: "test"
+            val serverIp = prefs.getString("server_ip", "10.0.2.2") ?: "10.0.2.2"
             
-            // RTMP URL에 암호 추가
-            rtmpUrl = "rtmp://$serverIp:1935/live/stream?pwd=$nodePassword"
+            Log.i(TAG, "🎬 Service Starting - Server: $serverIp (WebRTC)")
             
-            Log.i(TAG, "🎬 Service Starting - Server IP: $serverIp")
-            
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                savedResultCode = resultCode
-                savedData = data
-                startStream(resultCode, data)
-            } else {
+            if (resultCode != Activity.RESULT_OK || data == null) {
                 Log.e(TAG, "❌ Cannot start stream - Invalid data")
+                return START_STICKY
             }
+            savedResultCode = resultCode
+            savedData = data
+            startStream(resultCode, data)
         }
 
         return START_STICKY
     }
 
     private fun startStream(resultCode: Int, data: Intent, isReconnection: Boolean = false) {
-        if (isStreaming) return
+        Log.d(TAG, "▶️ startStream() called - isStreaming=$isStreaming, isReconnection=$isReconnection")
+        if (isStreaming) {
+            Log.w(TAG, "⚠️ Already streaming, ignoring startStream call")
+            return
+        }
         
-        // 1. 시작하는 순간의 화면 상태(가로/세로)를 최신으로 갱신
         initScreenMetrics()
-        
         if (!isReconnection) {
             savedResultCode = resultCode
             savedData = data
         }
         
-        try {
-            val streamingPrefs = getSharedPreferences("streaming_settings", Context.MODE_PRIVATE)
-            val useNativeRes = streamingPrefs.getBoolean("use_native_res", false)
-            
-            // 2. 현재 기기 방향 확인
-            val isPortrait = screenWidth < screenHeight
-            
-            val (width, height) = if (useNativeRes) {
-                val nativeWidth = (screenWidth / 2) * 2
-                val nativeHeight = (screenHeight / 2) * 2
-                Pair(nativeWidth, nativeHeight)
-            } else {
-                val resolutionIndex = streamingPrefs.getInt("resolution", 0)
-                // 기본값은 가로(Landscape) 기준
-                val (baseW, baseH) = when (resolutionIndex) {
-                    0 -> Pair(1920, 1080)
-                    1 -> Pair(2560, 1440)
-                    2 -> Pair(3840, 2160)
-                    else -> Pair(1920, 1080)
+        val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val serverIp = prefs.getString("server_ip", "10.0.2.2") ?: "10.0.2.2"
+        val audioEnabled = getSharedPreferences("streaming_settings", Context.MODE_PRIVATE).getBoolean("audio_enabled", true)
+        
+        Log.i(TAG, "🎯 서버 설정: IP=$serverIp, audio=$audioEnabled")
+        sendStatusBroadcast(STATUS_STARTING, "토큰 발급 중... (서버: $serverIp)", liveKitUrl)
+        updateNotification("토큰 발급 중...")
+        updateStatusColor(STATUS_CONNECTING)
+        isIntentionalStop = false
+        retryCount = 0
+        
+        Log.d(TAG, "🚀 Launching coroutine for token fetch...")
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "🔄 Fetching token from $serverIp...")
+                val tokenResult = withContext(Dispatchers.IO) { fetchLiveKitToken(serverIp) }
+                if (tokenResult == null) {
+                    Log.e(TAG, "❌ LiveKit 토큰 발급 실패")
+                    updateNotification("토큰 발급 실패")
+                    sendStatusBroadcast(STATUS_FAILED, "서버($serverIp)에서 토큰을 받지 못했습니다.")
+                    updateStatusColor(STATUS_FAILED)
+                    if (!isIntentionalStop) {
+                        retryCount++
+                        Log.w(TAG, "🔄 재연결 시도 예약 (attempt #$retryCount)")
+                        reconnectHandler.postDelayed(reconnectRunnable, 3000L)
+                    }
+                    return@launch
                 }
+                val (token, wsUrl) = tokenResult
+                liveKitUrl = wsUrl
+                Log.i(TAG, "✅ 토큰 발급 성공!")
+                Log.i(TAG, "📡 WebRTC 연결 준비: $wsUrl (room: class)")
+                Log.d(TAG, "🔑 Token: ${token.take(30)}...")
+                sendStatusBroadcast(STATUS_CONNECTING, "LiveKit 연결 중...", wsUrl)
+                updateNotification("LiveKit 연결 중...")
                 
-                // 현재 기기 방향에 맞춰 가로/세로 자동 스왑 (자유로운 변환)
-                if (isPortrait) {
-                    // 세로 모드: 너비 < 높이
-                    Pair(kotlin.math.min(baseW, baseH), kotlin.math.max(baseW, baseH))
-                } else {
-                    // 가로 모드: 너비 > 높이
-                    Pair(kotlin.math.max(baseW, baseH), kotlin.math.min(baseW, baseH))
+                Log.d(TAG, "🏗️ LiveKit 인스턴스 생성 중...")
+                val r = LiveKit.create(applicationContext)
+                room = r
+                Log.d(TAG, "✅ LiveKit 인스턴스 생성 완료")
+                
+                Log.d(TAG, "📦 ScreenCaptureParams 생성 중...")
+                val params = ScreenCaptureParams(mediaProjectionPermissionResultData = data)
+                Log.d(TAG, "✅ ScreenCaptureParams 생성 완료")
+                
+                Log.d(TAG, "🎧 이벤트 리스너 시작...")
+                serviceScope.launch {
+                    r.events.collect { event ->
+                        val eventName = event.javaClass.simpleName
+                        Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        Log.d(TAG, "📥 LiveKit 이벤트 수신: $eventName")
+                        Log.d(TAG, "   시각: ${System.currentTimeMillis()}")
+                        
+                        when (event) {
+                            is RoomEvent.Connected -> {
+                                Log.i(TAG, "✅ LiveKit 연결 성공!")
+                                Log.i(TAG, "   Room State: CONNECTED")
+                                retryCount = 0
+                                reconnectHandler.removeCallbacks(reconnectRunnable)
+                                
+                                Log.d(TAG, "🖥️ 화면 공유 활성화 시도...")
+                                val enabled = r.localParticipant.setScreenShareEnabled(true, params)
+                                if (!enabled) {
+                                    Log.e(TAG, "❌ 화면 공유 활성화 실패")
+                                    updateNotification("화면 공유 실패")
+                                    sendStatusBroadcast(STATUS_FAILED, "화면 공유를 켤 수 없습니다", liveKitUrl)
+                                    updateStatusColor(STATUS_FAILED)
+                                    r.disconnect()
+                                    return@collect
+                                }
+                                Log.i(TAG, "✅ 화면 공유 활성화 성공!")
+                                
+                                isStreaming = true
+                                startKeepAliveAnimation()
+                                startOrientationListener()
+                                showFloatingControl()
+                                updateNotification("✅ 스트리밍 중 - $liveKitUrl")
+                                sendStatusBroadcast(STATUS_CONNECTED, "연결 성공! 스트리밍 중", liveKitUrl)
+                                updateStatusColor(STATUS_CONNECTED)
+                                startHeartbeat()
+                                Log.i(TAG, "🎉 스트리밍 시작 완료!")
+                            }
+                            is RoomEvent.Disconnected -> {
+                                Log.w(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                                Log.w(TAG, "⚠️ LiveKit 연결 끊김")
+                                Log.w(TAG, "   사유: ${event.reason}")
+                                Log.w(TAG, "   의도적 중지: $isIntentionalStop")
+                                Log.w(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                                isStreaming = false
+                                removeFloatingControl()
+                                updateStatusColor(STATUS_DISCONNECTED)
+                                if (isIntentionalStop) {
+                                    updateNotification("연결 끊김 (의도적 중지)")
+                                    sendStatusBroadcast(STATUS_DISCONNECTED, "서버와 연결이 끊어졌습니다", liveKitUrl)
+                                } else {
+                                    retryCount++
+                                    Log.w(TAG, "🔄 자동 재연결 시도 예약 (attempt #$retryCount)")
+                                    updateNotification("재연결 대기 중... (#$retryCount)")
+                                    sendStatusBroadcast(STATUS_CONNECTING, "재연결 대기 중... (#$retryCount)", liveKitUrl)
+                                    reconnectHandler.postDelayed(reconnectRunnable, 3000L)
+                                }
+                                stopHeartbeat()
+                            }
+                            is RoomEvent.FailedToConnect -> {
+                                Log.e(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                                Log.e(TAG, "❌ LiveKit 연결 실패")
+                                Log.e(TAG, "   에러: ${event.error}")
+                                Log.e(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            }
+                            else -> {
+                                Log.d(TAG, "📋 기타 이벤트: $eventName")
+                                if (event is RoomEvent.TrackPublished) {
+                                    Log.d(TAG, "   - 트랙 발행됨")
+                                } else if (event is RoomEvent.TrackUnpublished) {
+                                    Log.d(TAG, "   - 트랙 발행 취소됨")
+                                }
+                                Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            }
+                        }
+                    }
+                }
+                Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                Log.d(TAG, "🔌 LiveKit WebSocket 연결 시작")
+                Log.d(TAG, "   대상 URL: $wsUrl")
+                Log.d(TAG, "   토큰 길이: ${token.length} chars")
+                Log.d(TAG, "   오디오: $audioEnabled")
+                Log.d(TAG, "   비디오: false")
+                Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                val connectStartTime = System.currentTimeMillis()
+                r.connect(
+                    wsUrl,
+                    token,
+                    ConnectOptions(audio = audioEnabled, video = false)
+                )
+                val connectCallTime = System.currentTimeMillis() - connectStartTime
+                
+                Log.d(TAG, "✅ r.connect() 호출 완료 (${connectCallTime}ms)")
+                Log.d(TAG, "⏳ WebSocket 핸드셰이크 대기 중...")
+                Log.d(TAG, "   - Connected 이벤트를 기다립니다")
+                Log.d(TAG, "   - 이벤트 리스너가 별도 코루틴에서 실행 중")
+                Log.d(TAG, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                updateNotification("WebSocket 연결 중...")
+                sendStatusBroadcast(STATUS_CONNECTING, "WebSocket 연결 중...", wsUrl)
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ 스트리밍 시작 실패: ${e.javaClass.simpleName}: ${e.message}", e)
+                e.printStackTrace()
+                updateNotification("연결 실패: ${e.message}")
+                sendStatusBroadcast(STATUS_FAILED, "연결 실패: ${e.message}", liveKitUrl)
+                updateStatusColor(STATUS_FAILED)
+                room?.disconnect()
+                room = null
+                if (!isIntentionalStop) {
+                    retryCount++
+                    Log.w(TAG, "🔄 에러 후 재연결 시도 예약 (attempt #$retryCount)")
+                    reconnectHandler.postDelayed(reconnectRunnable, 3000L)
                 }
             }
-            
-            val fpsIndex = streamingPrefs.getInt("fps", 2)
-            val fps = when (fpsIndex) {
-                0 -> 15; 1 -> 24; 2 -> 30; 3 -> 60; else -> 30
-            }
-            
-            val bitrateIndex = streamingPrefs.getInt("bitrate", 2)
-            val bitrate = when (bitrateIndex) {
-                0 -> 5000 * 1024; 1 -> 8000 * 1024; 2 -> 10000 * 1024; 3 -> 15000 * 1024
-                4 -> 20000 * 1024; 5 -> 25000 * 1024; 6 -> 30000 * 1024; else -> 10000 * 1024
-            }
-            
-            val audioEnabled = streamingPrefs.getBoolean("audio_enabled", true)
-            val iFrameInterval = 1 
-            
-            val audioReady = if (audioEnabled) rtmpDisplay.prepareAudio() else true
-            
-            // 계산된 최종 해상도로 인코더 준비
-            Log.i(TAG, "📐 Screen metrics: ${screenWidth}x${screenHeight}, Portrait: $isPortrait")
-            Log.i(TAG, "📐 Encoder resolution: ${width}x${height} @ ${fps}fps, ${bitrate/1024}kbps")
-            
-            val videoReady = rtmpDisplay.prepareVideo(
-                width, height, fps, bitrate, 0, iFrameInterval
-            )
-            
-            if (!audioReady || !videoReady) {
-                Log.e(TAG, "Failed to prepare audio or video")
-                updateNotification("준비 실패")
-                return
-            }
-            
-            rtmpDisplay.setIntentResult(resultCode, data)
-            
-            Log.i(TAG, "📡 Starting stream to: $rtmpUrl ($width x $height, ${if(isPortrait) "Portrait" else "Landscape"})")
-            sendStatusBroadcast(STATUS_STARTING, "스트리밍 준비 완료. 서버 연결 중...", rtmpUrl)
-            
-            isIntentionalStop = false 
-            retryCount = 0            
-            
-            rtmpDisplay.startStream(rtmpUrl)
-            isStreaming = true
-            
-            startPerformanceMonitoring()
-            startHeartbeat()
-            startKeepAliveAnimation() // CRITICAL for static screens
-            startOrientationListener() // 화면 회전 감지 시작
-            showFloatingControl()
-            
-            updateNotification("스트리밍 중...")
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error starting stream: ${e.message}", e)
-            updateNotification("시작 실패")
-            sendStatusBroadcast(STATUS_FAILED, "스트리밍 시작 실패: ${e.message}")
         }
     }
 
@@ -391,18 +580,22 @@ class ScreenCaptureService : Service(), ConnectChecker {
         reconnectHandler.removeCallbacks(reconnectRunnable)
         stopHeartbeat()
         stopKeepAliveAnimation()
-        stopOrientationListener() // Stop orientation listener
+        stopOrientationListener()
         
         try {
-            stopPerformanceMonitoring()
             removeFloatingControl()
-            
-            if (rtmpDisplay.isStreaming) {
-                rtmpDisplay.stopStream()
-            }
+            val r = room
+            room = null
             isStreaming = false
+            serviceScope.launch {
+                try {
+                    r?.localParticipant?.setScreenShareEnabled(false)
+                } catch (_: Exception) { }
+                r?.disconnect()
+                r?.release()
+            }
             updateNotification("스트리밍 중지됨")
-            Log.i(TAG, "Streaming stopped")
+            Log.i(TAG, "Streaming stopped (WebRTC)")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping stream: ${e.message}", e)
         }
@@ -415,12 +608,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 return
             }
             
-            if (isStreaming) {
-                try {
-                    if (rtmpDisplay.isStreaming) rtmpDisplay.stopStream()
-                    isStreaming = false
-                } catch (e: Exception) { }
-            }
+            if (isStreaming) stopStream()
             
             android.os.Handler(Looper.getMainLooper()).postDelayed({
                 try {
@@ -449,17 +637,9 @@ class ScreenCaptureService : Service(), ConnectChecker {
         val currentResIndex = prefs.getInt("resolution", 0)
         val currentUseNative = prefs.getBoolean("use_native_res", false)
         
-        // Bitrate Change (Real-time)
         if (newBitrateIndex != -1 && newBitrateIndex != currentBitrateIndex) {
-            val bitrate = when (newBitrateIndex) {
-                0 -> 5000 * 1024; 1 -> 8000 * 1024; 2 -> 10000 * 1024; 3 -> 15000 * 1024
-                4 -> 20000 * 1024; 5 -> 25000 * 1024; 6 -> 30000 * 1024; else -> 10000 * 1024
-            }
-            try {
-                rtmpDisplay.setVideoBitrateOnFly(bitrate)
-                prefs.edit().putInt("bitrate", newBitrateIndex).apply()
-                Toast.makeText(this, "비트레이트 변경됨", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) { }
+            prefs.edit().putInt("bitrate", newBitrateIndex).apply()
+            Toast.makeText(this, "비트레이트 설정 저장 (재시작 시 적용)", Toast.LENGTH_SHORT).show()
         }
         
         // Resolution/FPS Change (Restart)
@@ -784,14 +964,6 @@ class ScreenCaptureService : Service(), ConnectChecker {
         val currentResIndex = prefs.getInt("resolution", 0)
         val currentUseNative = prefs.getBoolean("use_native_res", false)
         
-        if (newBitrateIndex != currentBitrateIndex) {
-            val bitrate = when (newBitrateIndex) {
-                0 -> 5000 * 1024; 1 -> 8000 * 1024; 2 -> 10000 * 1024; 3 -> 15000 * 1024
-                4 -> 20000 * 1024; 5 -> 25000 * 1024; 6 -> 30000 * 1024; else -> 10000 * 1024
-            }
-            try { rtmpDisplay.setVideoBitrateOnFly(bitrate) } catch (e: Exception) { }
-        }
-        
         if ((newResIndex != currentResIndex) || (newUseNative != currentUseNative) || (newFpsIndex != currentFpsIndex)) {
             Toast.makeText(this, "설정 적용을 위해 재시작합니다...", Toast.LENGTH_SHORT).show()
             prefs.edit().apply {
@@ -874,21 +1046,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
                 connection.requestMethod = "GET"
                 
                 if (connection.responseCode == 200) {
-                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
                     connection.disconnect()
-                    
-                    try {
-                        val json = org.json.JSONObject(responseBody)
-                        if (!json.optBoolean("stream_active", false) && rtmpDisplay.isStreaming) {
-                            android.os.Handler(Looper.getMainLooper()).post {
-                                if (!isIntentionalStop) {
-                                    retryCount++
-                                    updateNotification("서버 재연결 중...")
-                                    try { rtmpDisplay.getStreamClient().reTry(2000L, "Stream inactive", rtmpUrl) } catch (e: Exception) {}
-                                }
-                            }
-                        }
-                    } catch (e: Exception) { }
                 } else {
                     connection.disconnect()
                 }
@@ -896,66 +1054,7 @@ class ScreenCaptureService : Service(), ConnectChecker {
         }.start()
     }
 
-    // ConnectChecker Implementation
-    override fun onConnectionStarted(url: String) {
-        updateNotification("연결 중...")
-        sendStatusBroadcast(STATUS_CONNECTING, "서버에 연결 중...", url)
-        updateStatusColor(STATUS_CONNECTING)
-    }
-
-    override fun onConnectionSuccess() {
-        retryCount = 0 
-        reconnectHandler.removeCallbacks(reconnectRunnable)
-        updateNotification("연결 성공 - 스트리밍 중")
-        sendStatusBroadcast(STATUS_CONNECTED, "연결 성공! 스트리밍 중")
-        updateStatusColor(STATUS_CONNECTED)
-        startHeartbeat()
-    }
-
-    override fun onConnectionFailed(reason: String) {
-        updateStatusColor(STATUS_FAILED)
-        if (isIntentionalStop) return
-
-        retryCount++
-        val delay = if (retryCount <= 2) 2000L else 5000L
-        updateNotification("연결 실패. 재시도 중...")
-        sendStatusBroadcast(STATUS_CONNECTING, "서버 연결 실패. 재시도 중...")
-        reconnectHandler.postDelayed(reconnectRunnable, delay)
-    }
-
-    override fun onDisconnect() {
-        updateStatusColor(STATUS_DISCONNECTED)
-        if (isIntentionalStop) {
-            updateNotification("연결 끊김")
-            sendStatusBroadcast(STATUS_DISCONNECTED, "서버와 연결이 끊어졌습니다")
-            return
-        }
-        
-        retryCount++
-        updateNotification("서버 재연결 대기 중...")
-        sendStatusBroadcast(STATUS_CONNECTING, "재연결 대기 중...")
-        try { rtmpDisplay.getStreamClient().reTry(3000L, "Disconnect", rtmpUrl) } catch (e: Exception) { stopHeartbeat() }
-    }
-
-    override fun onAuthError() {
-        updateNotification("인증 오류")
-        sendStatusBroadcast(STATUS_FAILED, "서버 인증 오류")
-        updateStatusColor(STATUS_FAILED)
-    }
-
-    override fun onAuthSuccess() { }
-    
-    override fun onNewBitrate(bitrate: Long) {
-        val currentTime = System.currentTimeMillis()
-        frameCount++
-        if (lastFrameTime > 0) {
-            frameTimeList.add(currentTime - lastFrameTime)
-            if (frameTimeList.size > 60) frameTimeList.removeAt(0)
-        }
-        lastFrameTime = currentTime
-    }
-    
-    private fun sendStatusBroadcast(status: String, message: String, url: String = rtmpUrl) {
+    private fun sendStatusBroadcast(status: String, message: String, url: String = liveKitUrl) {
         val intent = Intent(ACTION_CONNECTION_STATUS).apply {
             putExtra(EXTRA_STATUS, status)
             putExtra(EXTRA_MESSAGE, message)
@@ -964,30 +1063,4 @@ class ScreenCaptureService : Service(), ConnectChecker {
         sendBroadcast(intent)
     }
     
-    private fun startPerformanceMonitoring() {
-        frameCount = 0
-        lastFrameTime = System.currentTimeMillis()
-        lastStatsTime = System.currentTimeMillis()
-        frameTimeList.clear()
-        
-        performanceHandler.postDelayed(object : Runnable {
-            override fun run() {
-                if (isStreaming) {
-                    val currentTime = System.currentTimeMillis()
-                    val elapsed = (currentTime - lastStatsTime) / 1000.0
-                    if (elapsed > 0.1) {
-                        val fps = frameCount / elapsed
-                        Log.i(TAG, "FPS: %.1f".format(fps))
-                        frameCount = 0
-                        lastStatsTime = currentTime
-                    }
-                    performanceHandler.postDelayed(this, 5000)
-                }
-            }
-        }, 5000)
-    }
-    
-    private fun stopPerformanceMonitoring() {
-        performanceHandler.removeCallbacksAndMessages(null)
-    }
 }

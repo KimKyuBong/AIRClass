@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -39,6 +41,16 @@
         <!-- QR Scan Activity -->
         <activity
             android:name=".QRScanActivity"
+            android:exported="false" />
+
+        <!-- mDNS Discovery Activity -->
+        <activity
+            android:name=".MdnsDiscoveryActivity"
+            android:exported="false" />
+
+        <!-- TOTP Auth Activity -->
+        <activity
+            android:name=".TotpAuthActivity"
             android:exported="false" />
         
         <!-- ZXing Barcode Scanner Activity -->

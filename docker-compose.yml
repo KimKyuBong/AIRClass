@@ -11,8 +11,7 @@
 #   Main Node - FastAPI: 8000, LiveKit: 7880, RTC: 50000-50020
 #   Sub Node 1 - FastAPI: 8001, LiveKit: 7890, RTC: 51000-51020
 #   Sub Node 2 - FastAPI: 8002, LiveKit: 7900, RTC: 52000-52020
-
-version: '3.8'
+# (version 필드는 Compose V2에서 무시되므로 제거)
 
 services:
   # ============================================
@@ -85,8 +84,8 @@ services:
       # LiveKit 설정
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
-      LIVEKIT_URL: ws://localhost:7880  # 컨테이너 내부 주소
-      LIVEKIT_PUBLIC_URL: ws://${SERVER_IP}:7880  # 브라우저 접근용 (SERVER_IP와 동일)
+      LIVEKIT_URL: ws://localhost:7880  # 컨테이너 내부 전용
+      # 외부 접속·WebRTC 광고는 SERVER_IP만 사용 (GUI/스크립트에서 인터페이스 IP 주입)
       LIVEKIT_BINARY: /usr/local/bin/livekit-server
       LIVEKIT_PORT: 7880
       LIVEKIT_RTC_PORT_START: 50000
@@ -100,10 +99,14 @@ services:
       # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       CLUSTER_SECRET: ${CLUSTER_SECRET}
+      TOTP_SECRET: ${TOTP_SECRET}
       
       # 네트워크 설정 (스크립트/GUI에서 SERVER_IP만 주입하면 됨)
       CORS_ORIGINS: ${CORS_ORIGINS}
       SERVER_IP: ${SERVER_IP}
+      
+      # Android RTMP Ingress (메인 노드만, CreateIngress API용)
+      LIVEKIT_INGRESS_RTMP_BASE_URL: rtmp://${SERVER_IP}:1935/live
       
       # Redis & MongoDB
       REDIS_URL: redis://redis:6379
@@ -140,10 +143,40 @@ services:
       - "airclass.role=main"
       - "airclass.livekit=true"
 
+  # ============================================
+  # LiveKit Ingress - Android RTMP 수신 → LiveKit room "class" 퍼블리시
+  # 메인 노드와 함께 사용. 포트 1935 노출.
+  # ============================================
+  ingress:
+    image: livekit/ingress:latest
+    container_name: airclass-ingress
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_WS_URL: ws://main:7880
+      INGRESS_CONFIG_BODY: |
+        redis:
+          address: redis:6379
+        rtmp_port: 1935
+        logging:
+          level: info
+    ports:
+      - "1935:1935"
+    networks:
+      - airclass-network
+    depends_on:
+      main:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "airclass.role=ingress"
 
   # ============================================
   # Sub Node 1 - FastAPI + LiveKit (통합 노드)
-  # Main 노드에 자동 등록하여 부하 분산
+  # Main 노드에 자동 등록. 인증: CLUSTER_SECRET(HMAC) 또는 TOTP_SECRET(device 토큰, Android와 동일).
+  # MAIN_NODE_URL 없으면 mDNS로 메인 자동 발견.
   # ============================================
   sub-1:
     build:
@@ -151,7 +184,7 @@ services:
       dockerfile: Dockerfile
     container_name: airclass-sub-1
     environment:
-      # 클러스터 설정
+      # 클러스터 설정 (MAIN_NODE_URL 생략 시 mDNS로 메인 발견)
       MODE: sub
       NODE_NAME: node-1
       NODE_HOST: sub-1
@@ -174,6 +207,7 @@ services:
       # 보안 설정
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       CLUSTER_SECRET: ${CLUSTER_SECRET}
+      TOTP_SECRET: ${TOTP_SECRET}
       
       # 네트워크 설정
       CORS_ORIGINS: ${CORS_ORIGINS}
