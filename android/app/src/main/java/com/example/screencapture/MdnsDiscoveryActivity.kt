@@ -29,6 +29,7 @@ class MdnsDiscoveryActivity : AppCompatActivity() {
         private const val TAG = "MdnsDiscovery"
         private const val SERVICE_TYPE = "_airclass._tcp."
         private const val DISCOVERY_TIMEOUT_MS = 15_000L
+        private const val CACHE_VALIDITY_MS = 5 * 60 * 1000L // 5분 유효
     }
 
     private var nsdManager: NsdManager? = null
@@ -89,8 +90,37 @@ class MdnsDiscoveryActivity : AppCompatActivity() {
             startDiscovery()
         }
 
+        loadCachedServer()
         startDiscovery()
         mainHandler.postDelayed({ onDiscoveryTimeout() }, DISCOVERY_TIMEOUT_MS)
+    }
+
+    private fun cacheServer(entry: ServerEntry) {
+        getSharedPreferences("mdns_cache", MODE_PRIVATE).edit().apply {
+            putString("last_server_name", entry.name)
+            putString("last_server_host", entry.host)
+            putInt("last_server_port", entry.port)
+            putLong("last_server_timestamp", System.currentTimeMillis())
+            apply()
+        }
+    }
+
+    private fun loadCachedServer() {
+        val prefs = getSharedPreferences("mdns_cache", MODE_PRIVATE)
+        val timestamp = prefs.getLong("last_server_timestamp", 0L)
+        if (System.currentTimeMillis() - timestamp < CACHE_VALIDITY_MS) {
+            val name = prefs.getString("last_server_name", null)
+            val host = prefs.getString("last_server_host", null)
+            val port = prefs.getInt("last_server_port", -1)
+            if (name != null && host != null && port != -1) {
+                val entry = ServerEntry(name, host, port)
+                val key = "$host:$port"
+                if (discoveredServers.putIfAbsent(key, entry) == null) {
+                    addServerAndUpdateList(entry)
+                    statusText.text = "캐시된 서버를 찾았습니다. (최근 5분 이내)"
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -125,8 +155,10 @@ class MdnsDiscoveryActivity : AppCompatActivity() {
                         val port = serviceInfo.port
                         val name = serviceInfo.serviceName ?: "AIRClass"
                         val key = "$host:$port"
-                        if (discoveredServers.putIfAbsent(key, ServerEntry(name, host, port)) == null) {
-                            mainHandler.post { addServerAndUpdateList(ServerEntry(name, host, port)) }
+                        val entry = ServerEntry(name, host, port)
+                        if (discoveredServers.putIfAbsent(key, entry) == null) {
+                            cacheServer(entry)
+                            mainHandler.post { addServerAndUpdateList(entry) }
                         }
                     }
                 })

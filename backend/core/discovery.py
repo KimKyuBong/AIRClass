@@ -14,7 +14,7 @@ import asyncio
 import socket
 import logging
 import json
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 import httpx
 
@@ -40,6 +40,7 @@ class DiscoveredNode:
 def _discovery_ports() -> List[int]:
     """자동 검색에 사용할 API 포트 목록 (동적 포트 범위 대응: 8000, 8100, 8200, ...)"""
     import os
+
     raw = os.getenv("DISCOVERY_PORTS", "8000,8100,8200,8300")
     try:
         return [int(p.strip()) for p in raw.split(",") if p.strip()]
@@ -53,6 +54,15 @@ class MultiDiscoveryManager:
     def __init__(self):
         self.discovered_nodes: List[DiscoveredNode] = []
         self.client = httpx.AsyncClient(timeout=3.0)
+        self._zeroconf: Any = None
+
+    async def _get_zeroconf(self) -> Any:
+        """mDNS 브라우저/리스너 충돌 방지를 위한 Zeroconf 인스턴스 관리"""
+        if self._zeroconf is None:
+            from zeroconf import Zeroconf
+
+            self._zeroconf = Zeroconf()
+        return self._zeroconf
 
     async def find_main_node(self, timeout: int = 10) -> Optional[DiscoveredNode]:
         """
@@ -95,7 +105,7 @@ class MultiDiscoveryManager:
     async def _try_mdns_discovery(self, timeout: int = 3) -> Optional[DiscoveredNode]:
         """mDNS를 사용한 자동 발견"""
         try:
-            from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange
+            from zeroconf import ServiceBrowser, ServiceStateChange
 
             found_node = None
 
@@ -115,7 +125,7 @@ class MultiDiscoveryManager:
                             version=info.properties.get(b"version", b"2.0.0").decode(),
                         )
 
-            zeroconf = Zeroconf()
+            zeroconf = await self._get_zeroconf()
             browser = ServiceBrowser(
                 zeroconf, "_airclass._tcp.local.", handlers=[on_service_state_change]
             )
@@ -123,7 +133,7 @@ class MultiDiscoveryManager:
             # 타임아웃까지 대기
             await asyncio.sleep(timeout)
 
-            zeroconf.close()
+            browser.cancel()
             return found_node
 
         except ImportError:
@@ -152,11 +162,22 @@ class MultiDiscoveryManager:
             logger.info(f"🔍 네트워크 대역 스캔: {network_prefix}.0/24 (포트: {ports})")
 
             # 동시에 여러 IP × 여러 포트 스캔 (동적 포트 범위 대응)
+            # 현재 IP 주변부터 우선 스캔 (서브넷 우선 최적화)
             tasks = []
-            for i in range(1, 255):
-                ip = f"{network_prefix}.{i}"
-                if ip == local_ip:
+            local_last_octet = int(ip_parts[3])
+
+            # 1. 주변 IP 먼저 (±10)
+            nearby = []
+            for i in range(max(1, local_last_octet - 10), min(255, local_last_octet + 10)):
+                if i == local_last_octet:
                     continue
+                nearby.append(i)
+
+            # 2. 나머지 IP
+            others = [i for i in range(1, 255) if i not in nearby and i != local_last_octet]
+
+            for i in nearby + others:
+                ip = f"{network_prefix}.{i}"
                 for port in ports:
                     tasks.append(self._check_airclass_node(ip, port))
 
@@ -176,9 +197,7 @@ class MultiDiscoveryManager:
             logger.error(f"❌ 네트워크 스캔 오류: {e}")
             return None
 
-    async def _check_airclass_node(
-        self, ip: str, port: int = 8000
-    ) -> Optional[DiscoveredNode]:
+    async def _check_airclass_node(self, ip: str, port: int = 8000) -> Optional[DiscoveredNode]:
         """특정 IP가 AirClass 노드인지 확인"""
         try:
             response = await self.client.get(
@@ -265,10 +284,13 @@ class MultiDiscoveryManager:
         else:
             advertise_ip = self._get_local_ip()
             if advertise_ip == "127.0.0.1":
-                logger.warning("⚠️ mDNS: 로컬 IP를 127.0.0.1로 감지. .env에 SERVER_IP(호스트 LAN IP) 설정 시 앱 검색 가능")
+                logger.warning(
+                    "⚠️ mDNS: 로컬 IP를 127.0.0.1로 감지. .env에 SERVER_IP(호스트 LAN IP) 설정 시 앱 검색 가능"
+                )
             logger.info(f"📡 mDNS 광고 시도 (자동 감지): {advertise_ip}:{port}")
 
         try:
+            zeroconf = await self._get_zeroconf()
             try:
                 addr_bytes = socket.inet_aton(advertise_ip)
             except OSError:
@@ -290,21 +312,22 @@ class MultiDiscoveryManager:
                 server=f"{node_name}.local.",
             )
 
-            zeroconf = Zeroconf()
             zeroconf.register_service(info)
 
-            logger.info(f"✅ mDNS 광고 시작됨: 서비스 타입=_airclass._tcp.local. 주소={advertise_ip}:{port}")
-            logger.info("   (같은 Wi‑Fi의 Android 앱에서 '자동 검색(mDNS)'으로 이 서버가 보여야 합니다)")
+            logger.info(
+                f"✅ mDNS 광고 시작됨: 서비스 타입=_airclass._tcp.local. 주소={advertise_ip}:{port}"
+            )
+            logger.info(
+                "   (같은 Wi‑Fi의 Android 앱에서 '자동 검색(mDNS)'으로 이 서버가 보여야 합니다)"
+            )
 
-            return zeroconf  # 종료 시 close() 호출 필요
+            return zeroconf  # discovery_manager가 관리하므로 굳이 반환값으로 close할 필요는 없으나 호환성 유지
 
         except Exception as e:
             logger.warning(f"⚠️ mDNS 광고 실패: {e} (다른 발견 방법 사용)")
             return None
 
-    async def verify_manual_ip(
-        self, ip: str, port: int = 8000
-    ) -> Optional[DiscoveredNode]:
+    async def verify_manual_ip(self, ip: str, port: int = 8000) -> Optional[DiscoveredNode]:
         """수동으로 입력한 IP 주소 검증"""
         logger.info(f"🔍 수동 IP 검증 중: {ip}:{port}")
         node = await self._check_airclass_node(ip, port)
@@ -319,6 +342,9 @@ class MultiDiscoveryManager:
 
     async def close(self):
         """리소스 정리"""
+        if self._zeroconf:
+            self._zeroconf.close()
+            self._zeroconf = None
         await self.client.aclose()
 
 

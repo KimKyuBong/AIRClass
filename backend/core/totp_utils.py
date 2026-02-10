@@ -7,9 +7,14 @@ QR 스캔 후 어떤 TOTP 호환 앱(Google Authenticator, Authy 등)이든 사�
 
 import os
 import logging
-from typing import Optional, Tuple
+import time
+from typing import Optional, Tuple, Dict
 
 logger = logging.getLogger("uvicorn")
+
+# 재생 공격 방지를 위한 사용된 코드 저장소 (메모리)
+# {code: expiration_timestamp}
+_used_codes: Dict[str, float] = {}
 
 try:
     import pyotp
@@ -32,15 +37,43 @@ def generate_totp_secret() -> str:
 def verify_totp_code(secret: str, code: str, valid_window: int = 1) -> bool:
     """
     TOTP 6자리 코드 검증.
+    재생 공격 방지 및 시간 동기화 검증 포함.
     valid_window: 허용할 시간 창 (0=현재 30초만, 1=앞뒤 30초 포함).
     """
     if not pyotp or not secret or not code:
         return False
+
     code = code.strip().replace(" ", "")
     if len(code) != 6 or not code.isdigit():
         return False
+
+    # 1. 이미 사용된 코드인지 체크 (재생 공격 방지)
+    current_time = time.time()
+    if code in _used_codes:
+        if _used_codes[code] > current_time:
+            logger.warning(f"Replay attack detected for code: {code}")
+            return False
+        else:
+            # 만료된 코드는 삭제
+            del _used_codes[code]
+
+    # 2. TOTP 검증
     totp = pyotp.TOTP(secret)
-    return totp.verify(code, valid_window=valid_window)
+    is_valid = totp.verify(code, valid_window=valid_window)
+
+    if is_valid:
+        # 3. 사용된 코드로 마킹 (30초 * (valid_window * 2 + 1) 동안 유효)
+        # 보통 30초 단위이므로, valid_window=1이면 앞뒤 30초 포함 총 90초 동안 유효할 수 있음
+        expiry = current_time + (30 * (valid_window * 2 + 1))
+        _used_codes[code] = expiry
+
+        # 오래된 코드 정리 (가끔 수행)
+        if len(_used_codes) > 100:
+            expired = [c for c, t in _used_codes.items() if t < current_time]
+            for c in expired:
+                del _used_codes[c]
+
+    return is_valid
 
 
 def get_provisioning_uri(

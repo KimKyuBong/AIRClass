@@ -34,9 +34,7 @@ def generate_cluster_auth_token(secret: str, timestamp: str) -> str:
         HMAC-SHA256 해시 (hex 형식)
     """
     message = f"{timestamp}:{secret}"
-    return hmac.new(
-        secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    return hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def verify_cluster_auth_token(secret: str, timestamp: str, provided_token: str) -> bool:
@@ -171,9 +169,7 @@ class ClusterManager:
         """가장 부하가 적은 노드 선택 (로드 밸런싱 - Fallback용)"""
         # Main 노드 제외 - Sub 노드만 스트리밍 배포
         healthy_nodes = [
-            n
-            for n in self.nodes.values()
-            if n.is_healthy and n.node_id != self.main_node_id
+            n for n in self.nodes.values() if n.is_healthy and n.node_id != self.main_node_id
         ]
 
         if not healthy_nodes:
@@ -198,9 +194,7 @@ class ClusterManager:
         """
         # Main 노드 제외 - Sub 노드만 스트리밍 배포
         healthy_nodes = [
-            n
-            for n in self.nodes.values()
-            if n.is_healthy and n.node_id != self.main_node_id
+            n for n in self.nodes.values() if n.is_healthy and n.node_id != self.main_node_id
         ]
 
         logger.info(
@@ -234,9 +228,7 @@ class ClusterManager:
         )
         return selected_node
 
-    def get_node_for_stream(
-        self, stream_id: str, use_sticky: bool = True
-    ) -> Optional[NodeInfo]:
+    def get_node_for_stream(self, stream_id: str, use_sticky: bool = True) -> Optional[NodeInfo]:
         """
         특정 스트림을 처리할 노드 선택
 
@@ -303,9 +295,7 @@ class ClusterManager:
             "offline_nodes": total_nodes - healthy_nodes,
             "total_connections": total_connections,
             "total_capacity": total_capacity,
-            "utilization": (total_connections / total_capacity * 100)
-            if total_capacity > 0
-            else 0,
+            "utilization": (total_connections / total_capacity * 100) if total_capacity > 0 else 0,
             "nodes": self.get_all_nodes(),
         }
 
@@ -370,6 +360,7 @@ class SubNodeClient:
             return None
         try:
             from core.totp_utils import get_current_totp_code
+
             code = get_current_totp_code(totp_secret)
             if not code:
                 return self._device_token  # 캐시라도 반환
@@ -416,7 +407,9 @@ class SubNodeClient:
             if self._use_device_token_auth():
                 token = await self._get_or_refresh_device_token()
                 if not token:
-                    logger.error("❌ TOTP 모드: device 토큰 발급 실패. TOTP_SECRET과 메인 노드 TOTP 설정을 확인하세요.")
+                    logger.error(
+                        "❌ TOTP 모드: device 토큰 발급 실패. TOTP_SECRET과 메인 노드 TOTP 설정을 확인하세요."
+                    )
                     return False
                 headers = {"Authorization": f"Bearer {token}"}
                 # Bearer 사용 시 auth_token/timestamp/totp_code 제거
@@ -432,7 +425,9 @@ class SubNodeClient:
                     if token:
                         headers["Authorization"] = f"Bearer {token}"
                         response = await self.client.post(
-                            f"{self.main_node_url}/cluster/register", json=node_dict, headers=headers
+                            f"{self.main_node_url}/cluster/register",
+                            json=node_dict,
+                            headers=headers,
                         )
             else:
                 cluster_secret = os.getenv("CLUSTER_SECRET", "")
@@ -525,10 +520,31 @@ class SubNodeClient:
         """주기적으로 heartbeat 전송 (재연결 로직 포함)"""
         consecutive_failures = 0
         registered = True
+        last_local_ip = None
+        try:
+            from core.discovery import discovery_manager
+
+            last_local_ip = discovery_manager._get_local_ip()
+        except:
+            pass
 
         while True:
             try:
                 await asyncio.sleep(5)  # 5초마다
+
+                # 네트워크 변경 감지
+                try:
+                    from core.discovery import discovery_manager
+
+                    current_ip = discovery_manager._get_local_ip()
+                    if last_local_ip and current_ip != last_local_ip:
+                        logger.warning(f"🌐 네트워크 변경 감지: {last_local_ip} -> {current_ip}")
+                        last_local_ip = current_ip
+                        # IP가 바뀌었으므로 재등록 필요
+                        registered = False
+                        consecutive_failures = 3  # 즉시 재등록 유도
+                except Exception as e:
+                    logger.debug(f"네트워크 체크 실패: {e}")
 
                 # 현재 통계 수집
                 stats = {
@@ -542,9 +558,7 @@ class SubNodeClient:
                 if success:
                     consecutive_failures = 0
                     if not registered:
-                        logger.info(
-                            f"✅ Reconnected to main node: {self.main_node_url}"
-                        )
+                        logger.info(f"✅ Reconnected to main node: {self.main_node_url}")
                         registered = True
                 else:
                     consecutive_failures += 1
@@ -562,9 +576,7 @@ class SubNodeClient:
                             consecutive_failures = 0
                             registered = True
                         else:
-                            logger.error(
-                                f"❌ Re-registration failed, will retry in 5 seconds"
-                            )
+                            logger.error(f"❌ Re-registration failed, will retry in 5 seconds")
 
             except asyncio.CancelledError:
                 break
@@ -614,9 +626,7 @@ async def init_cluster_mode():
             from core.discovery import discovery_manager
 
             global mdns_service
-            advertised_port = int(
-                os.getenv("MAIN_API_PORT", os.getenv("NODE_PORT", "8000"))
-            )
+            advertised_port = int(os.getenv("MAIN_API_PORT", os.getenv("NODE_PORT", "8000")))
             mdns_service = await discovery_manager.advertise_main_node(
                 port=advertised_port,
                 node_name=os.getenv("NODE_NAME", "main"),
@@ -634,26 +644,33 @@ async def init_cluster_mode():
 
         # MAIN_NODE_URL이 없으면 자동 발견 시도
         if not main_node_url:
-            logger.info("🔍 MAIN_NODE_URL 미설정 - 자동 발견 시도...")
+            max_retries = 5
+            retry_delay = 2
+            for i in range(max_retries):
+                logger.info(
+                    f"🔍 MAIN_NODE_URL 미설정 - 자동 발견 시도... (시도 {i + 1}/{max_retries})"
+                )
+                try:
+                    from core.discovery import find_main_node_with_fallback
 
-            try:
-                from core.discovery import find_main_node_with_fallback
+                    discovered_node = await find_main_node_with_fallback(timeout=10)
+                    if discovered_node:
+                        main_node_url = discovered_node.url
+                        logger.info(f"✅ 메인 노드 자동 발견 성공: {main_node_url}")
+                        logger.info(f"   발견 방법: {discovered_node.discovery_method}")
+                        break
+                except Exception as e:
+                    logger.error(f"❌ 자동 발견 오류: {e}")
 
-                discovered_node = await find_main_node_with_fallback(timeout=10)
+                if i < max_retries - 1:
+                    wait_time = retry_delay * (2**i)
+                    logger.info(f"⏳ {wait_time}초 후 재시도 (exponential backoff)...")
+                    await asyncio.sleep(wait_time)
 
-                if discovered_node:
-                    main_node_url = discovered_node.url
-                    logger.info(f"✅ 메인 노드 자동 발견 성공: {main_node_url}")
-                    logger.info(f"   발견 방법: {discovered_node.discovery_method}")
-                else:
-                    logger.error("❌ 메인 노드 자동 발견 실패!")
-                    logger.error("   MAIN_NODE_URL 환경 변수를 설정하거나")
-                    logger.error("   install.sh 스크립트를 사용하세요")
-                    return
-
-            except Exception as e:
-                logger.error(f"❌ 자동 발견 오류: {e}")
-                logger.error("   MAIN_NODE_URL 환경 변수를 수동으로 설정하세요")
+            if not main_node_url:
+                logger.error("❌ 메인 노드 자동 발견 실패!")
+                logger.error("   MAIN_NODE_URL 환경 변수를 설정하거나")
+                logger.error("   install.sh 스크립트를 사용하세요")
                 return
 
         logger.info(f"🔗 Starting in SUB NODE mode, connecting to {main_node_url}")
