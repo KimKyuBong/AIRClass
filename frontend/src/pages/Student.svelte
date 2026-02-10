@@ -151,7 +151,7 @@
         for (const publication of participant.trackPublications.values()) {
           console.log('[Student] Publication:', publication.trackName, 'isSubscribed:', publication.isSubscribed, 'hasTrack:', !!publication.track);
           
-          if (publication.isSubscribed && publication.track) {
+          if (publication.track) {
             const track = publication.track;
             broadcastStream = new MediaStream([track.mediaStreamTrack]);
             isVideoLoaded = true;
@@ -168,8 +168,8 @@
               isPortraitVideo = settings.height > settings.width;
             }
           } else if (!publication.isSubscribed) {
-            console.log('[Student] Track not subscribed yet, subscribing:', publication.trackSid);
-            await publication.subscribe();
+            console.log('[Student] Track not subscribed yet, setting subscribed: true', publication.trackSid);
+            publication.setSubscribed(true);
           }
         }
       }

@@ -61,7 +61,7 @@ class LiveKitConfigGenerator:
                 "http_port": 7880,
                 "rtc_start": 50000,
                 "rtc_end": 50020,
-                "tcp_port": 7881,
+                "tcp_port": 7882,
                 "udp_port": 7882,
             }
 
@@ -85,7 +85,7 @@ class LiveKitConfigGenerator:
                 "http_port": self.livekit_port,
                 "rtc_start": self.rtc_port_range_start,
                 "rtc_end": self.rtc_port_range_end,
-                "tcp_port": 7881,
+                "tcp_port": 7882,
                 "udp_port": 7882,
             }
 
@@ -124,6 +124,7 @@ class LiveKitConfigGenerator:
             "rtc": {
                 "port_range_start": ports["rtc_start"],
                 "port_range_end": ports["rtc_end"],
+                "tcp_port": 7886,  # 7881-7885 충돌 방지
                 "use_external_ip": False,
                 # 외부 주입 SERVER_IP 그대로 사용 (같은 IP로 WebSocket + 미디어)
                 "node_ip": os.getenv("SERVER_IP") or "127.0.0.1",

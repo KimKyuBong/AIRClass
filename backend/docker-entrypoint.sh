@@ -41,21 +41,17 @@ fi
 # echo "📡 Starting MediaMTX..."
 # ./mediamtx "$CONFIG_FILE" &
 
-# LiveKit Server 시작 (백그라운드)
-echo "📡 Starting LiveKit Server..."
+# LiveKit 설정 파일만 생성 (서버는 livekit_manager.py에서 시작)
+echo "📡 Generating LiveKit config..."
 mkdir -p /app/configs
 export SERVER_IP=${SERVER_IP:-127.0.0.1}
 python3 -c "
-from core.livekit_config import create_livekit_config
-config = create_livekit_config('main', 'main')
-with open('/app/configs/livekit.yaml', 'w') as f:
-    import yaml
-    yaml.dump(config, f)
+from core.livekit_config import LiveKitConfigGenerator
+generator = LiveKitConfigGenerator(node_id='main', mode='main', redis_url='${REDIS_URL:-redis://redis:6379}')
+generator.save_to_file('/app/configs/livekit.yaml')
+print('✅ LiveKit config saved to /app/configs/livekit.yaml')
 "
-${LIVEKIT_BINARY:-/usr/local/bin/livekit-server} --config /app/configs/livekit.yaml &
-LIVEKIT_PID=$!
-echo "✅ LiveKit Server started (PID: $LIVEKIT_PID)"
 
-# FastAPI 시작 (포그라운드로 실행)
+# FastAPI 시작 (포그라운드로 실행) - LiveKit 서버는 livekit_manager.py에서 시작
 echo "🐍 Starting FastAPI in foreground..."
 exec uvicorn main:app --host 0.0.0.0 --port 8000

@@ -19,7 +19,7 @@ class WelcomeActivity : AppCompatActivity() {
             // 테스트용: 자동으로 서버 IP 설정하고 접속 시도
             val prefs = getSharedPreferences("settings", MODE_PRIVATE)
             prefs.edit().apply {
-                putString("server_ip", "10.120.184.119")
+                putString("server_ip", "192.168.0.127")
                 putString("node_password", "test")
                 apply()
             }
